@@ -2,26 +2,43 @@
 Creates a job and sends it to the worker.
 """
 
-import time
-from queue import Queue
-from job_schema import Job
-from worker import job_queue  # Import the same queue for local testing
+import requests
+import json
 
-def main():
-    print("Client: Creating and sending jobs...\n")
+WORKER_URL = "http://localhost:8000/submit-job"
 
-    # Example jobs
-    jobs = [
-        Job(job_id="job_001", requester="agent_a", task_type="analyze-data", input_data={"dataset": "data1.csv"}),
-        Job(job_id="job_002", requester="agent_a", task_type="summarize-report", input_data={"report": "report.docx"}),
-    ]
+def send_job_with_payment_logic(job_id, task, data):
+    payload = {
+        "job_id": job_id,
+        "requester": "agent_a.molt.eth",
+        "task_type": task,
+        "input_data": data
+    }
 
-    for job in jobs:
-        print(f"Client: Sending job {job.job_id} - {job.task_type}")
-        job_queue.put(job)
-        time.sleep(1)  # Slight delay between sending jobs
+    print(f"🚀 Client: Sending job {job_id}...")
+    
+    # Attempt 1: Standard request (No payment header)
+    response = requests.post(WORKER_URL, json=payload)
 
-    print("\nClient: All jobs sent!")
+    if response.status_code == 402:
+        print(f"⚠️ Worker demanded payment! Details: {response.text}")
+        
+        # INTERACTION: This is where your SDK "signs" the transaction
+        print("💸 SDK: Signing 0.05 USDC payment for Arc Network...")
+        mock_payment_proof = "signed_tx_hash_0x123abc" 
+        
+        # Attempt 2: Retrying with the X-PAYMENT header
+        headers = {"X-PAYMENT": mock_payment_proof}
+        print("🔄 Client: Retrying with payment proof...")
+        response = requests.post(WORKER_URL, json=payload, headers=headers)
+
+    if response.status_code == 200:
+        print(f"✅ Job Complete! Result: {response.json()['result']}")
+        
+        # --- REPUTATION (TV) ---
+        print(f"⭐ Client: Submitting EAS Attestation for {response.json()['worker']} (Rating: 5/5)")
+    else:
+        print(f"❌ Failed: {response.status_code}")
 
 if __name__ == "__main__":
-    main()
+    send_job_with_payment_logic("job_001", "analyze-data", {"file": "test.csv"})

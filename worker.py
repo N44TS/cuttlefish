@@ -3,28 +3,43 @@ listens for jobs and executes them.
 """
 
 import time
-from queue import Queue
-from job_schema import Job
+from fastapi import FastAPI, Request, Response
+from pydantic import BaseModel
 
-# Simulate a message queue (in real life, could be HTTP, messaging service, etc.)
-job_queue = Queue()
+app = FastAPI()
 
-def execute_job(job: Job):
-    print(f"Worker received job: {job.task_type}")
-    # Simulate doing some work
-    time.sleep(2)
-    result = f"Completed {job.task_type} for {job.requester}"
-    print(f"Worker finished job: {job.task_type}")
-    print(f"Result: {result}\n")
-    return result
+# MOCK DATABASE: In production, these are Circle/Arc wallet addresses
+WORKER_WALLET = "0xWorkerENS_or_Address"
+JOB_PRICE_USDC = 0.05 
 
-def worker_loop():
-    print("Worker is listening for jobs...\n")
-    while True:
-        job = job_queue.get()  # Blocks until a job is available
-        execute_job(job)
-        job_queue.task_done()
+class JobRequest(BaseModel):
+    job_id: str
+    requester: str
+    task_type: str
+    input_data: dict
+
+def execute_logic(task_type, data):
+    print(f"⚙️ Working on: {task_type}")
+    time.sleep(2) # Simulate work
+    return f"Processed {task_type} successfully."
+
+@app.post("/submit-job")
+async def submit_job(job: JobRequest, request: Request):
+    # --- THE X402 GUARD ---
+    payment_proof = request.headers.get("X-PAYMENT")
+    
+    if not payment_proof:
+        # We reject the job and send back the payment requirements
+        return Response(
+            status_code=402,
+            content=f"Payment Required. Send {JOB_PRICE_USDC} USDC to {WORKER_WALLET} on Arc."
+        )
+
+    # --- THE EXECUTION ---
+    # If the code reaches here, payment was "verified"
+    result = execute_logic(job.task_type, job.input_data)
+    return {"status": "completed", "result": result, "worker": WORKER_WALLET}
 
 if __name__ == "__main__":
-    # Start the worker loop
-    worker_loop()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
