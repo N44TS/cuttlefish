@@ -1,3 +1,9 @@
+        #!/usr/bin/env python3
+"""
+ENS Domain Registration Script for Sepolia Testnet
+Handles the full commit-reveal registration flow.
+"""
+
 import os
 import sys
 import time
@@ -5,8 +11,21 @@ import secrets
 from web3 import Web3
 from eth_abi import encode
 
-# Replace these with your values
-PRIVATE_KEY = os.environ.get("PRIVATE_KEY", "privatekeyhere")
+# ============== CONFIGURATION ==============
+# Private key from env not just sat there in a file omg!
+PRIVATE_KEY = os.environ.get("AGENTPAY_PRIVATE_KEY") or os.environ.get("PRIVATE_KEY")
+if not PRIVATE_KEY:
+    raise ValueError("Set AGENTPAY_PRIVATE_KEY (or PRIVATE_KEY) in environment")
+
+# Domain name il put in command line arg for now
+DOMAIN_NAME = (
+    (sys.argv[1] if len(sys.argv) > 1 else None)
+    or os.environ.get("AGENTPAY_ENS_NAME", "").strip().lower().removesuffix(".eth")
+    or None
+)
+if not DOMAIN_NAME:
+    raise ValueError("Provide domain name via: AGENTPAY_ENS_NAME env var or command line arg")
+
 RPC_URL = os.environ.get("RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com")
 DURATION_SECONDS = 31536000  # 1 year in seconds
 
@@ -277,7 +296,6 @@ def get_registration_price(domain_name: str, duration_seconds: int = 31536000) -
 
 
 if __name__ == "__main__":
-    # example usage
     try:
         result = register_ens_domain(
             domain_name=DOMAIN_NAME,
@@ -290,3 +308,4 @@ if __name__ == "__main__":
             print(f"  {key}: {value}")
     except Exception as e:
         print(f"\n❌ Error: {e}")
+        sys.exit(1)
