@@ -9,6 +9,7 @@
  * We fetch it via getChannelData(channelId).lastValidState.
  * 
  * This has worked after step4a was run and a channel already existed. not been tested when channel is newly formed in 4a
+ * *****SKIP THIS STEP IF GOING TO RUN STEP 4C cos it breaks it!! something about not allowing funded.
  *
  * Run: npm run step4b
  * Prereq: .env with PRIVATE_KEY; step4a already run (channel exists); Sepolia ETH for gas.
