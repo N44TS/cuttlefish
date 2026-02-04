@@ -1,0 +1,38 @@
+{
+  "name": "yellow-mvp",
+  "version": "0.1.0",
+  "description": "Standalone Yellow/Nitrolite MVP for agent micro-payments (no ENS dependency)",
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts",
+    "step1": "tsx steps/step1-connect.ts",
+    "step2a": "tsx steps/step2a-auth-request.ts",
+    "step2b": "tsx steps/step2b-auth-verify.ts",
+    "step3": "tsx steps/step3-ledger-balances.ts",
+    "step4a": "tsx steps/step4a-create-channel.ts",
+    "step4b": "tsx steps/step4b-resize-channel.ts",
+    "step4c": "tsx steps/step4c-transfer.ts",
+    "step4d": "tsx steps/step4d-close-channel.ts",
+    "step5a": "tsx steps/step5a-create-app-session.ts",
+    "step5b": "tsx steps/step5b-get-app-sessions.ts",
+    "step5c": "tsx steps/step5c-submit-app-state.ts",
+    "step5d": "tsx steps/step5d-two-parties.ts",
+    "step5e": "tsx steps/step5e-escrow-state.ts",
+    "step5f": "tsx steps/step5f-close-app-session.ts",
+    "faucet": "tsx scripts/request-faucet.ts",
+    "close-all": "tsx scripts/close-all.ts",
+    "close-all-app-sessions": "tsx scripts/close-all-app-sessions.ts"
+  },
+  "dependencies": {
+    "@erc7824/nitrolite": "^0.5.3",
+    "dotenv": "^16.3.1",
+    "viem": "^2.21.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
