@@ -1,0 +1,269 @@
+"""
+Minimal worker server: 402 flow.
+
+Run from agentpay directory:
+  pip install -e .   # if you have pip that supports pyproject editable install
+  python examples/worker_server.py
+If you get ModuleNotFoundError: No module named 'agentpay', run from repo root instead:
+  cd /path/to/cuttlefish2 && PYTHONPATH=agentpay python agentpay/examples/worker_server.py
+(That puts agentpay's parent on the path so import agentpay finds the agentpay folder.)
+
+POST /submit-job with Job payload.
+- No X-Payment → 402 + Bill (with payment_method: "yellow" or "onchain")
+- With X-Payment (tx_hash or Yellow session proof) → verify payment, do work, return JobResult
+
+For Yellow payments:
+- Client creates session (quorum 2) and submits state (client signs)
+- Worker receives session proof → calls sign_state_worker to add second signature
+- Both signatures applied → payment verified
+
+Env for Yellow:
+- AGENTPAY_WORKER_PRIVATE_KEY: Worker's private key (worker signs the state).
+- AGENTPAY_CLIENT_ADDRESS: Client's 0x address (needed to build state allocations: client 0, worker amount).
+  Not the other way around: worker has its own key; worker needs client's *address* (not key) for the state.
+"""
+
+import os
+import sys
+import json
+import time
+import subprocess
+from pathlib import Path
+from typing import Optional, Tuple
+
+# Allow running as script without pip install: add repo root so import agentpay works
+if __name__ == "__main__" or "agentpay" not in sys.modules:
+    _root = Path(__file__).resolve().parent.parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
+from fastapi import FastAPI, Request, Response
+from web3 import Web3
+
+from agentpay.schema import Job, Bill, JobResult
+
+app = FastAPI()
+
+SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
+# USDC Sepolia
+USDC = "0x25762231808F040410586504fDF08Df259A2163c"
+# Worker's private key (for Yellow sign_state_worker)
+WORKER_PRIVATE_KEY = os.getenv("AGENTPAY_WORKER_PRIVATE_KEY")
+# Worker's payment address: from AGENTPAY_WORKER_WALLET, or derived from WORKER_PRIVATE_KEY
+def _worker_wallet():
+    addr = os.getenv("AGENTPAY_WORKER_WALLET")
+    if addr and addr != "0xYourWorkerAddress":
+        return addr
+    if WORKER_PRIVATE_KEY:
+        from eth_account import Account
+        pk = WORKER_PRIVATE_KEY.strip()
+        if not pk.startswith("0x"):
+            pk = "0x" + pk
+        return Account.from_key(pk).address
+    return "0xYourWorkerAddress"
+
+WORKER_WALLET = _worker_wallet()
+
+def _client_address_for_job(requester: str) -> str:
+    """Client address for Yellow: env or job requester."""
+    addr = os.getenv("AGENTPAY_CLIENT_ADDRESS")
+    if addr and addr != "0xYourClientAddress":
+        return addr
+    return requester or ""
+
+# Client address (for Yellow allocations); fallback is job.requester in submit_job
+CLIENT_ADDRESS = os.getenv("AGENTPAY_CLIENT_ADDRESS")
+JOB_PRICE_USDC = 0.05
+CHAIN_ID = 11155111
+# MVP: Yellow only (prize track). On-chain removed from default path.
+PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow")
+
+# Path to bridge.ts
+BRIDGE_TS = Path(__file__).parent.parent.parent / "yellow_test" / "bridge.ts"
+
+ERC20_ABI = [
+    {"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
+]
+
+
+def verify_payment_onchain(tx_hash: str, recipient: str, amount_usdc: float) -> tuple[bool, str]:
+    """Verify on-chain payment. Returns (ok, reason)."""
+    tx_hash = (tx_hash or "").strip()
+    if not tx_hash or not tx_hash.startswith("0x") or len(tx_hash) != 66:
+        return False, "PAYMENT_INVALID_TX_HASH"
+    w3 = Web3(Web3.HTTPProvider(SEPOLIA_RPC, request_kwargs={"timeout": 20}))
+    if not w3.is_connected():
+        return False, "PAYMENT_RPC_ERROR"
+    try:
+        for attempt in range(3):
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+            if receipt is not None:
+                break
+            if attempt < 2:
+                time.sleep(2)
+        if receipt is None:
+            return False, "PAYMENT_PENDING"
+        if receipt.get("status") != 1:
+            return False, "PAYMENT_REVERTED"
+        return True, ""
+    except Exception as e:
+        return False, f"PAYMENT_ERROR:{type(e).__name__}"
+
+
+def _parse_yellow_proof(proof: str) -> Optional[Tuple[str, int]]:
+    """Parse proof into (session_id, version). Accepts yellow|id|ver, session:id:version:N, or id:version:N (if header was stripped)."""
+    proof = (proof or "").strip()
+    if not proof:
+        return None
+    # yellow|session_id|version
+    if proof.startswith("yellow|"):
+        parts = proof.split("|")
+        if len(parts) >= 3:
+            try:
+                return parts[1].strip(), int(parts[2])
+            except ValueError:
+                pass
+        return None
+    # session:session_id:version:N or session_id:version:N (some proxies strip "session:" or "yellow|")
+    if "version" in proof and ":" in proof:
+        parts = proof.split(":")
+        for i, p in enumerate(parts):
+            if p == "version" and i + 1 < len(parts):
+                try:
+                    ver = int(parts[i + 1])
+                    sid = (parts[1] if parts[0] == "session" and i >= 2 else (":".join(parts[:i]) or parts[0])).strip()
+                    if not sid:
+                        return None
+                    if not sid.startswith("0x") and len(sid) >= 40:
+                        sid = "0x" + sid
+                    return sid, ver
+                except (ValueError, IndexError):
+                    pass
+        return None
+    return None
+
+
+def verify_payment_yellow(
+    proof: str, amount_usdc: float, client_address_override: Optional[str] = None
+) -> tuple[bool, str]:
+    """Verify Yellow session payment and add worker signature. Accepts yellow|id|ver or session:id:version:N."""
+    parsed = _parse_yellow_proof(proof)
+    if not parsed:
+        return False, "PAYMENT_INVALID_YELLOW_PROOF"
+    session_id, version = parsed
+    if not session_id:
+        return False, "PAYMENT_YELLOW_MISSING_SESSION_ID"
+    if not WORKER_PRIVATE_KEY:
+        return False, "PAYMENT_YELLOW_WORKER_KEY_MISSING"
+    client_addr = client_address_override or CLIENT_ADDRESS
+    if not client_addr or client_addr == "0xYourClientAddress":
+        return False, "PAYMENT_YELLOW_CLIENT_ADDRESS_MISSING"
+    amount_units = str(int(amount_usdc * (10**6)))
+    sid = session_id if session_id.startswith("0x") else "0x" + session_id
+    try:
+        bridge_cmd = {
+            "command": "sign_state_worker",
+            "app_session_id": sid,
+            "worker_private_key": WORKER_PRIVATE_KEY,
+            "client_address": client_addr,
+            "worker_address": WORKER_WALLET,
+            "amount": amount_units,
+            "version": version,
+        }
+        result = subprocess.run(
+            ["npx", "tsx", str(BRIDGE_TS)],
+            input=json.dumps(bridge_cmd),
+            capture_output=True,
+            text=True,
+            cwd=BRIDGE_TS.parent,
+            check=True,
+            timeout=30,
+        )
+        response = json.loads(result.stdout)
+        if not response.get("success"):
+            return False, f"PAYMENT_YELLOW_SIGN_FAILED:{response.get('error', 'Unknown')}"
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, f"PAYMENT_YELLOW_BRIDGE_ERROR:{e.stderr or e.stdout or 'Unknown'}"
+    except Exception as e:
+        return False, f"PAYMENT_YELLOW_ERROR:{type(e).__name__}:{str(e)}"
+
+
+def verify_payment(
+    proof: str,
+    recipient: str,
+    amount_usdc: float,
+    payment_method: str,
+    client_address_for_job: Optional[str] = None,
+) -> tuple[bool, str]:
+    """Verify payment. For Yellow, client_address_for_job can be job.requester."""
+    if payment_method == "yellow":
+        return verify_payment_yellow(proof, amount_usdc, client_address_for_job)
+    return verify_payment_onchain(proof, recipient, amount_usdc)
+
+
+@app.get("/")
+def root():
+    """Health check: 402 test and load balancers expect 200 here."""
+    return {"ok": True, "service": "agentpay-worker", "submit_job": "/submit-job"}
+
+
+@app.post("/submit-job")
+async def submit_job(request: Request):
+    body = await request.json()
+    job = Job(
+        job_id=body["job_id"],
+        requester=body["requester"],
+        task_type=body["task_type"],
+        input_data=body.get("input_data", {}),
+    )
+    payment_proof = request.headers.get("X-Payment")
+    if not payment_proof:
+        if PAYMENT_METHOD == "yellow" and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
+            return Response(
+                status_code=503,
+                content="Yellow requires AGENTPAY_WORKER_PRIVATE_KEY (worker key). Set it and restart.",
+            )
+        return Response(
+            status_code=402,
+            content=Bill(
+                amount=JOB_PRICE_USDC,
+                recipient=WORKER_WALLET,
+                chain_id=CHAIN_ID,
+                message=f"Pay {JOB_PRICE_USDC} USDC for {job.task_type}",
+                payment_method=PAYMENT_METHOD,
+            ).model_dump_json(),
+            media_type="application/json",
+        )
+    
+    # Determine payment method from proof format or default (MVP: Yellow only)
+    payment_method = PAYMENT_METHOD
+    if payment_proof:
+        p = payment_proof.strip()
+        if p.startswith("yellow|") or p.startswith("session:"):
+            payment_method = "yellow"
+        elif p.startswith("0x") and len(p) == 66:
+            payment_method = "onchain"
+    client_addr = _client_address_for_job(job.requester)
+    ok, reason = verify_payment(
+        payment_proof, WORKER_WALLET, JOB_PRICE_USDC, payment_method, client_addr
+    )
+    if not ok:
+        # Include first 60 chars of proof in response to help debug (no secrets)
+        debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
+        return Response(status_code=402, content=f"{reason} (received: {debug})")
+    # Do work (placeholder)
+    result = f"Worker completed {job.task_type} for {job.requester}"
+    return {
+        "status": "completed",
+        "result": result,
+        "worker": WORKER_WALLET,
+        "attestation_uid": None,
+        "error": None,
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", os.getenv("AGENTPAY_PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=port)
