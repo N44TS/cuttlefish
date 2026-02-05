@@ -26,6 +26,42 @@ def _bridge_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "yellow_test" / "bridge.ts"
 
 
+def _check_bridge_setup() -> tuple[bool, str]:
+    """
+    Check if bridge is set up correctly. Returns (ok, error_message).
+    Checks: bridge.ts exists, node_modules exists, npx works.
+    """
+    bridge_ts = _bridge_path()
+    if not bridge_ts.exists():
+        env_dir = os.getenv("AGENTPAY_YELLOW_BRIDGE_DIR")
+        if env_dir:
+            return False, (
+                f"Bridge not found at {bridge_ts}. "
+                f"Set AGENTPAY_YELLOW_BRIDGE_DIR to a directory containing bridge.ts, "
+                f"or clone the repo and run from repo root."
+            )
+        return False, (
+            f"Bridge not found at {bridge_ts}. "
+            f"Options: (1) Set AGENTPAY_YELLOW_BRIDGE_DIR=/path/to/yellow_test, "
+            f"(2) Clone repo and run from repo root, (3) Copy yellow_test/ from repo to your project."
+        )
+    
+    bridge_dir = bridge_ts.parent
+    node_modules = bridge_dir / "node_modules"
+    if not node_modules.exists():
+        return False, (
+            f"Bridge found at {bridge_ts}, but node_modules missing. "
+            f"Run: cd {bridge_dir} && npm install"
+        )
+    
+    # Check if npx/tsx is available
+    import shutil
+    if not shutil.which("npx"):
+        return False, "npx not found. Install Node.js (https://nodejs.org/) to use Yellow payments."
+    
+    return True, ""
+
+
 def _to_units(amount_usdc: float) -> str:
     """Convert USDC amount to ytest.usd units (6 decimals, as string)."""
     return str(int(amount_usdc * (10**YELLOW_DECIMALS)))
@@ -33,11 +69,11 @@ def _to_units(amount_usdc: float) -> str:
 
 def _call_bridge(command: dict, timeout: int = 35) -> dict:
     """Call the TypeScript bridge and return parsed response."""
+    ok, error_msg = _check_bridge_setup()
+    if not ok:
+        raise FileNotFoundError(error_msg)
+    
     bridge_ts = _bridge_path()
-    if not bridge_ts.exists():
-        raise FileNotFoundError(
-            f"Bridge not found at {bridge_ts}. Set AGENTPAY_YELLOW_BRIDGE_DIR to the dir containing bridge.ts, or run from repo with yellow_test/."
-        )
 
     try:
         result = subprocess.run(
@@ -56,13 +92,15 @@ def _call_bridge(command: dict, timeout: int = 35) -> dict:
 
         return json.loads(result.stdout)
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            f"Bridge execution failed: {e.stderr or e.stdout or 'Unknown error'}"
-        )
+        err = (e.stderr or e.stdout or str(e)).strip() if e.stderr or e.stdout else "Unknown error"
+        raise RuntimeError(f"Bridge execution failed: {err}")
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse bridge response: {e}. Output: {result.stdout}")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Bridge timeout after {timeout}s")
+    except subprocess.TimeoutExpired as e:
+        err = f"Bridge timeout after {timeout}s. The channel path needs ensureChannel (~90s) + transferAndClose (~120s)."
+        if e.stderr:
+            err += f" Bridge stderr: {e.stderr[:500]}"
+        raise RuntimeError(err)
 
 
 def pay_yellow(
@@ -182,7 +220,8 @@ def pay_yellow_channel(bill: Bill, wallet: AgentWallet) -> str:
         "worker_address": bill.recipient,
         "amount": amount_units,
     }
-    response = _call_bridge(cmd, timeout=120)
+    # Bridge runs ensureChannel (~45–90s) + transferAndClose (~120s); need >210s total
+    response = _call_bridge(cmd, timeout=240)
     if not response.get("success"):
         raise RuntimeError(f"pay_via_channel failed: {response.get('error')}")
     data = response.get("data") or {}

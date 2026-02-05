@@ -494,16 +494,16 @@ MAINNET_RPCS = [
 ]
 
 
-def _connect_multiple(rpc_urls: List[str]) -> Web3:
-    """Connect to first available RPC from list."""
+def _connect_multiple(rpc_urls: List[str], timeout: int = 15) -> Web3:
+    """Connect to first available RPC from list. Uses timeout so ENS lookup cannot hang."""
     for url in rpc_urls:
         try:
-            w3 = Web3(Web3.HTTPProvider(url))
+            w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": timeout}))
             if w3.is_connected():
                 return w3
         except Exception:
             continue
-    raise ConnectionError(f"Could not connect to any RPC: {rpc_urls}")
+    raise ConnectionError(f"Could not connect to any RPC within {timeout}s: {rpc_urls}")
 
 
 def get_agent_info(ens_name: str, rpc_url: Optional[str] = None, mainnet: bool = False) -> Optional[Dict[str, str]]:
