@@ -193,17 +193,24 @@ def request_job_by_ens(
     wallet: Requester wallet (pays the bill)
     rpc_url, mainnet: Passed to get_agent_info for ENS resolution (Sepolia by default)
     """
-    from agentpay.ens import get_agent_info
+    from agentpay.ens2 import get_agent_info
 
     info = get_agent_info(worker_ens_name, rpc_url=rpc_url, mainnet=mainnet)
     if not info:
-        return JobResult(status="error", error=f"ENS lookup failed: no agent info for {worker_ens_name}")
-    endpoint = info.get("endpoint") or ""
-    if not endpoint.strip():
         return JobResult(
             status="error",
-            error=f"Agent {worker_ens_name} has no agentpay.endpoint set in ENS",
+            error=f"ENS lookup failed for {worker_ens_name}. Check: (1) Name exists on Sepolia ENS, (2) Has resolver set. Use provision_ens_identity() to set agentpay records.",
         )
+    endpoint = info.get("endpoint") or ""
+    if not endpoint.strip():
+        # Show what IS set to help debug
+        has_caps = bool(info.get("capabilities"))
+        has_prices = bool(info.get("prices"))
+        missing = f"Agent {worker_ens_name} has no agentpay.endpoint set in ENS."
+        if has_caps or has_prices:
+            missing += f" Found: capabilities={bool(has_caps)}, prices={bool(has_prices)}. Missing: endpoint (required)."
+        missing += f" Set it with: provision_ens_identity(wallet, '{worker_ens_name}', capabilities='...', endpoint='http://...')"
+        return JobResult(status="error", error=missing)
     submit_url = _submit_job_url(endpoint)
     return request_job(
         job,
@@ -245,7 +252,7 @@ def hire_agent(
     requester: Optional; default is wallet.address.
     """
     import secrets
-    from agentpay.ens import discover_agents, get_agent_info
+    from agentpay.ens2 import discover_agents, get_agent_info
 
     if worker_ens_name:
         info = get_agent_info(worker_ens_name, rpc_url=rpc_url, mainnet=mainnet)
