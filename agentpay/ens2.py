@@ -10,9 +10,10 @@ No module-level env load; all functions take a wallet (AgentWallet).
 import os
 import secrets
 import time
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from web3 import Web3
+from web3.exceptions import TransactionNotFound
 
 from agentpay.wallet import AgentWallet
 
@@ -132,18 +133,81 @@ def _connect(rpc: Optional[str] = None) -> Web3:
     return w3
 
 
-def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300):
+def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Transaction"):
     """Wait for tx receipt; longer timeout for Sepolia; clear error on timeout."""
-    try:
-        return w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
-    except Exception as e:
-        tx_hex = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
-        if "TimeExhausted" in type(e).__name__ or "Timeout" in type(e).__name__:
-            raise RuntimeError(
-                f"Transaction not confirmed within {timeout}s. "
-                f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
-            ) from e
-        raise
+    tx_hex = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+    print(f"⏳ {description} sent: https://sepolia.etherscan.io/tx/{tx_hex}")
+    
+    # First check if transaction exists (may take a moment to propagate)
+    print(f"   Verifying transaction was broadcast...", end="", flush=True)
+    tx_found = False
+    for i in range(10):  # Check for up to 10 seconds
+        try:
+            tx_info = w3.eth.get_transaction(tx_hash)
+            if tx_info:
+                tx_found = True
+                print(f"\n   ✅ Transaction found on network")
+                break
+        except TransactionNotFound:
+            time.sleep(1)
+            print(".", end="", flush=True)
+    
+    if not tx_found:
+        print(f"\n   ⚠️  Transaction not found on network yet (may still be propagating)")
+        print(f"   Check manually: https://sepolia.etherscan.io/tx/{tx_hex}")
+    
+    print(f"   Waiting for confirmation (this can take 30-120 seconds)...", end="", flush=True)
+    
+    start_time = time.time()
+    last_update = start_time
+    step = 3  # Check every 3 seconds
+    
+    # Use polling approach similar to flow.py but with progress feedback
+    max_iterations = timeout // step
+    for i in range(max_iterations):
+        try:
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+            if receipt is not None:
+                elapsed = int(time.time() - start_time)
+                status = receipt.get("status")
+                if status == 1:
+                    print(f"\n✅ {description} confirmed after {elapsed}s")
+                    return receipt
+                else:
+                    # Transaction failed
+                    elapsed = int(time.time() - start_time)
+                    print(f"\n❌ {description} failed after {elapsed}s (status: {status})")
+                    raise RuntimeError(
+                        f"Transaction failed with status {status}. "
+                        f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
+                    )
+        except TransactionNotFound:
+            # Transaction not indexed yet, keep waiting
+            elapsed = int(time.time() - start_time)
+            if elapsed > timeout:
+                print(f"\n❌ {description} timeout after {elapsed}s")
+                raise RuntimeError(
+                    f"Transaction not confirmed within {timeout}s. "
+                    f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
+                )
+            # Update progress every 10 seconds
+            if elapsed - int(last_update) >= 10:
+                print(f".", end="", flush=True)
+                last_update = elapsed
+            time.sleep(step)
+        except Exception as e:
+            # Other exceptions (connection errors, etc.) - re-raise immediately
+            elapsed = int(time.time() - start_time)
+            print(f"\n❌ {description} error after {elapsed}s: {e}")
+            raise
+    
+    # Timeout reached
+    elapsed = int(time.time() - start_time)
+    print(f"\n❌ {description} timeout after {elapsed}s")
+    raise RuntimeError(
+        f"Transaction not confirmed within {timeout}s. "
+        f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
+    )
 
 
 # --- Layer 1: Registration (ens_register_only.py flow) ---
@@ -159,28 +223,43 @@ def register_ens_name(
     Register a .eth name on Sepolia. Exact same flow as ens_register_only.py.
     Returns (True, "label.eth") or (False, error_message).
     """
+    print(f"\n📝 Starting ENS registration for '{label}.eth'...")
+    
     label = label.strip().lower().removesuffix(".eth")
     if not label or len(label) < 3:
         return False, "Label must be at least 3 characters."
 
+    print("🔌 Connecting to Sepolia RPC...")
     w3 = _connect(rpc_url)
+    print("✅ Connected")
+    
     controller = w3.eth.contract(
         address=Web3.to_checksum_address(ETH_REGISTRAR_CONTROLLER),
         abi=CONTROLLER_ABI,
     )
     owner_address = wallet.address
 
+    print(f"🔍 Checking if '{label}.eth' is available...")
     if not controller.functions.available(label).call():
         return False, f"'{label}.eth' is not available."
+    print("✅ Name is available")
 
+    print("💰 Calculating registration cost...")
     price = controller.functions.rentPrice(label, duration_seconds).call()
     total_price = price[0] + price[1]
     total_price_with_buffer = int(total_price * 1.05)
+    eth_cost = total_price_with_buffer / 10**18
+    print(f"   Cost: ~{eth_cost:.6f} ETH")
 
     balance = w3.eth.get_balance(owner_address)
+    balance_eth = balance / 10**18
+    needed = (total_price_with_buffer + 500_000 * 30 * 10**9) / 10**18
+    print(f"   Wallet balance: {balance_eth:.6f} ETH")
     if balance < total_price_with_buffer + 500_000 * 30 * 10**9:
-        return False, f"Insufficient balance. Need ~{(total_price_with_buffer + 500_000 * 30 * 10**9) / 10**18:.4f} ETH (Sepolia faucet: https://sepoliafaucet.com)."
+        return False, f"Insufficient balance. Need ~{needed:.4f} ETH (Sepolia faucet: https://sepoliafaucet.com)."
+    print("✅ Sufficient balance")
 
+    print("🔐 Generating commitment secret...")
     secret = secrets.token_bytes(32)
     commitment = controller.functions.makeCommitment(
         label,
@@ -192,18 +271,18 @@ def register_ens_name(
         set_reverse_record,
         0,
     ).call()
+    print("✅ Commitment prepared")
 
-    pk = wallet.account.key.hex()
-    if not pk.startswith("0x"):
-        pk = "0x" + pk
-
-    # Commit
+    # Commit - RESTORED TO WORKING PATTERN
+    print("\n📤 Step 1/2: Committing registration...")
     commit_tx = controller.functions.commit(commitment).build_transaction({
         "from": owner_address,
         "nonce": w3.eth.get_transaction_count(owner_address),
         "gas": 100000,
         "gasPrice": w3.eth.gas_price,
     })
+    # Use w3.eth.account.sign_transaction like working version
+    pk = wallet.account.key.hex()
     signed_commit = w3.eth.account.sign_transaction(commit_tx, pk)
     commit_tx_hash = w3.eth.send_raw_transaction(signed_commit.raw_transaction)
     commit_receipt = w3.eth.wait_for_transaction_receipt(commit_tx_hash)
@@ -212,9 +291,15 @@ def register_ens_name(
 
     min_age = controller.functions.minCommitmentAge().call()
     wait_time = min_age + 5
-    time.sleep(wait_time)
+    print(f"\n⏳ Waiting {wait_time}s for commitment to mature (ENS requirement)...")
+    for i in range(wait_time):
+        if i % 10 == 0 and i > 0:
+            print(f"   {i}/{wait_time}s...", end="\r", flush=True)
+        time.sleep(1)
+    print(f"   {wait_time}/{wait_time}s ✅")
 
-    # Register
+    # Register - RESTORED TO WORKING PATTERN
+    print("\n📤 Step 2/2: Registering ENS name...")
     register_tx = controller.functions.register(
         label,
         Web3.to_checksum_address(owner_address),
@@ -231,12 +316,14 @@ def register_ens_name(
         "gas": 300000,
         "gasPrice": w3.eth.gas_price,
     })
+    # Use w3.eth.account.sign_transaction like working version
     signed_register = w3.eth.account.sign_transaction(register_tx, pk)
     register_tx_hash = w3.eth.send_raw_transaction(signed_register.raw_transaction)
     register_receipt = w3.eth.wait_for_transaction_receipt(register_tx_hash)
     if register_receipt.get("status") != 1:
         return False, "Register transaction failed."
 
+    print(f"\n🎉 Successfully registered '{label}.eth'!")
     return True, f"{label}.eth"
 
 
@@ -261,6 +348,7 @@ def provision_ens_identity(
     Wallet must own the ENS name (or own the .eth NFT and we reclaim first).
     Returns (True, ens_name) or (False, error_message).
     """
+    print(f"\n⚙️  Provisioning ENS identity for '{ens_name}'...")
     w3 = _connect(rpc_url)
     ens_name = ens_name.strip().lower().removesuffix(".eth") + ".eth"  # normalize
     node = namehash(ens_name)
@@ -300,65 +388,471 @@ def provision_ens_identity(
                     return False, f"Name '{ens_name}' not found on Base Registrar (wrong chain or not .eth?)."
                 if nft_owner.lower() != wallet.address.lower():
                     return False, f"Wallet does not own the .eth NFT for '{ens_name}' (owner: {nft_owner})."
-                pk = wallet.account.key.hex()
-                if not pk.startswith("0x"):
-                    pk = "0x" + pk
                 reclaim_tx = base_registrar.functions.reclaim(token_id, Web3.to_checksum_address(wallet.address)).build_transaction({
                     "from": wallet.address,
-                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                    "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                     "gas": 100000,
-                    "gasPrice": w3.eth.gas_price,
+                    "nonce": w3.eth.get_transaction_count(wallet.address),
                 })
-                signed = w3.eth.account.sign_transaction(reclaim_tx, pk)
+                print("🔓 Reclaiming ownership from Base Registrar...")
+                signed = wallet.account.sign_transaction(reclaim_tx)
                 tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-                _wait_receipt(w3, tx_hash)
+                _wait_receipt(w3, tx_hash, description="Reclaim ownership")
             else:
                 return False, f"Wallet does not own '{ens_name}' (registry owner: {owner})."
 
     try:
         resolver_addr = registry.functions.resolver(node).call()
         if not resolver_addr or resolver_addr == "0x0000000000000000000000000000000000000000":
+            print("🔧 Setting resolver...")
             if use_registry_for_set_resolver:
-                set_resolver_contract = registry
+                # Use registry.setResolver (wallet owns the name directly)
+                tx = registry.functions.setResolver(node, Web3.to_checksum_address(SEPOLIA_PUBLIC_RESOLVER)).build_transaction({
+                    "from": wallet.address,
+                    "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
+                    "gas": 100000,
+                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                })
             else:
-                set_resolver_contract = w3.eth.contract(address=Web3.to_checksum_address(SEPOLIA_NAME_WRAPPER), abi=NAME_WRAPPER_ABI)
-            tx = set_resolver_contract.functions.setResolver(node, Web3.to_checksum_address(SEPOLIA_PUBLIC_RESOLVER)).build_transaction({
-                "from": wallet.address,
-                "nonce": w3.eth.get_transaction_count(wallet.address),
-                "gas": 100000,
-                "gasPrice": w3.eth.gas_price,
-            })
-            pk = wallet.account.key.hex()
-            if not pk.startswith("0x"):
-                pk = "0x" + pk
-            signed = w3.eth.account.sign_transaction(tx, pk)
+                # Use Name Wrapper (name is wrapped)
+                name_wrapper = w3.eth.contract(address=Web3.to_checksum_address(SEPOLIA_NAME_WRAPPER), abi=NAME_WRAPPER_ABI)
+                tx = name_wrapper.functions.setResolver(node, Web3.to_checksum_address(SEPOLIA_PUBLIC_RESOLVER)).build_transaction({
+                    "from": wallet.address,
+                    "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
+                    "gas": 100000,
+                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                })
+            
+            # Use wallet.account.sign_transaction (matches working ens.py)
+            signed = wallet.account.sign_transaction(tx)
             set_resolver_tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            _wait_receipt(w3, set_resolver_tx_hash)
-            resolver_addr = SEPOLIA_PUBLIC_RESOLVER
+            _wait_receipt(w3, set_resolver_tx_hash, timeout=300, description="Set resolver")
+            
+            # Verify resolver was set
+            time.sleep(2)  # Brief wait for state to update
+            resolver_addr = registry.functions.resolver(node).call()
+            if not resolver_addr or resolver_addr == "0x0000000000000000000000000000000000000000":
+                return False, "Resolver was not set after transaction confirmed. Check transaction status."
+            print("✅ Resolver set successfully")
+        else:
+            print("✅ Resolver already set")
 
         resolver = w3.eth.contract(
             address=Web3.to_checksum_address(resolver_addr),
             abi=RESOLVER_ABI,
         )
-        pk = wallet.account.key.hex()
-        if not pk.startswith("0x"):
-            pk = "0x" + pk
 
-        for key, value in [
-            (KEY_CAPABILITIES, capabilities),
-            (KEY_ENDPOINT, endpoint),
-            (KEY_PRICES, prices),
-        ]:
+        print("📝 Setting text records...")
+        # Always set endpoint (required), set capabilities and prices if provided
+        records_to_set = []
+        if endpoint:
+            records_to_set.append((KEY_ENDPOINT, endpoint))
+        if capabilities:
+            records_to_set.append((KEY_CAPABILITIES, capabilities))
+        if prices:  # Set prices if provided (even if "N/A" - that's a valid value)
+            records_to_set.append((KEY_PRICES, prices))
+        
+        if not records_to_set:
+            return False, "No records to set (endpoint is required)"
+        
+        for i, (key, value) in enumerate(records_to_set, 1):
+            print(f"   [{i}/{len(records_to_set)}] Setting {key}...")
+            # Use same pattern as working ens.py: chainId, wallet.account.sign_transaction
             tx = resolver.functions.setText(node, key, value).build_transaction({
                 "from": wallet.address,
-                "nonce": w3.eth.get_transaction_count(wallet.address),
+                "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                 "gas": 80000,
-                "gasPrice": w3.eth.gas_price,
+                "nonce": w3.eth.get_transaction_count(wallet.address),
             })
-            signed = w3.eth.account.sign_transaction(tx, pk)
+            # Use wallet.account.sign_transaction (matches working ens.py)
+            signed = wallet.account.sign_transaction(tx)
             tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            _wait_receipt(w3, tx_hash)
+            _wait_receipt(w3, tx_hash, timeout=300, description=f"Set {key}")
     except RuntimeError as e:
         return False, str(e)
 
+    print(f"\n✅ Successfully provisioned '{ens_name}'")
     return True, ens_name
+
+
+# --- Convenience functions (discovery, combined register+provision, setup) ---
+
+# Env vars for agent config
+AGENTPAY_ENS_NAME_ENV = "AGENTPAY_ENS_NAME"
+AGENTPAY_CAPABILITIES_ENV = "AGENTPAY_CAPABILITIES"
+AGENTPAY_ENDPOINT_ENV = "AGENTPAY_ENDPOINT"
+AGENTPAY_PRICES_ENV = "AGENTPAY_PRICES"
+
+# RPC fallbacks (same as ens.py)
+SEPOLIA_RPCS = [
+    "https://ethereum-sepolia-rpc.publicnode.com",
+    "https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161",
+]
+MAINNET_RPCS = [
+    "https://eth.llamarpc.com",
+    "https://ethereum.publicnode.com",
+]
+
+
+def _connect_multiple(rpc_urls: List[str]) -> Web3:
+    """Connect to first available RPC from list."""
+    for url in rpc_urls:
+        try:
+            w3 = Web3(Web3.HTTPProvider(url))
+            if w3.is_connected():
+                return w3
+        except Exception:
+            continue
+    raise ConnectionError(f"Could not connect to any RPC: {rpc_urls}")
+
+
+def get_agent_info(ens_name: str, rpc_url: Optional[str] = None, mainnet: bool = False) -> Optional[Dict[str, str]]:
+    """
+    Get agent info from ENS text records.
+
+    Returns dict with name, capabilities, prices, endpoint or None if not found.
+    Default mainnet=False: uses Sepolia testnet. Set mainnet=True for mainnet.
+    
+    Note: endpoint is required for hiring; capabilities and prices are optional.
+    """
+    rpc_urls = [rpc_url] if rpc_url else (MAINNET_RPCS if mainnet else SEPOLIA_RPCS)
+    registry_addr = SEPOLIA_ENS_REGISTRY if not mainnet else "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"
+    try:
+        w3 = _connect_multiple(rpc_urls)
+    except Exception:
+        return None
+    
+    registry = w3.eth.contract(address=Web3.to_checksum_address(registry_addr), abi=REGISTRY_ABI)
+    node = namehash(ens_name)
+    try:
+        resolver_addr = registry.functions.resolver(node).call()
+        if not resolver_addr or resolver_addr == "0x0000000000000000000000000000000000000000":
+            return None
+        resolver = w3.eth.contract(address=Web3.to_checksum_address(resolver_addr), abi=RESOLVER_ABI)
+        # Read all records (endpoint required for hiring, but return partial info if missing)
+        endpoint = resolver.functions.text(node, KEY_ENDPOINT).call() or ""
+        capabilities = resolver.functions.text(node, KEY_CAPABILITIES).call() or ""
+        prices = resolver.functions.text(node, KEY_PRICES).call() or ""
+        # Return info even if endpoint is missing (caller can check)
+        return {
+            "name": ens_name,
+            "capabilities": capabilities,
+            "prices": prices,
+            "endpoint": endpoint,
+        }
+    except Exception:
+        return None
+
+
+def discover_agents(
+    capability: str,
+    known_agents: List[str],
+    rpc_url: Optional[str] = None,
+    mainnet: bool = False,
+) -> List[Dict[str, str]]:
+    """
+    Find agents that offer a capability. Checks a list of ENS names.
+
+    In production you'd use a subgraph or indexer; here we check known_agents.
+    """
+    out = []
+    for ens_name in known_agents:
+        info = get_agent_info(ens_name, rpc_url=rpc_url, mainnet=mainnet)
+        if not info:
+            continue
+        caps = [c.strip().lower() for c in info["capabilities"].split(",")]
+        if capability.lower() in caps:
+            out.append(info)
+    return out
+
+
+def get_ens_name_for_registration() -> str:
+    """
+    Return the ENS name the bot/human chose for sign-up (from AGENTPAY_ENS_NAME env).
+    Use this so the agent is not assigned a random name: set AGENTPAY_ENS_NAME=myagent
+    before registering, then pass the result to register_ens_name(wallet, name).
+    Returns empty string if not set.
+    """
+    return (os.getenv(AGENTPAY_ENS_NAME_ENV) or "").strip().lower().removesuffix(".eth")
+
+
+def get_agent_provisioning_from_env() -> Tuple[str, str, str]:
+    """
+    Return (capabilities, endpoint, prices) from env for automatic provisioning.
+    Agent or deployer sets AGENTPAY_CAPABILITIES, AGENTPAY_ENDPOINT, AGENTPAY_PRICES.
+    Returns ("", "", "N/A") if not set (caller can still pass explicit values).
+    """
+    caps = (os.getenv(AGENTPAY_CAPABILITIES_ENV) or "").strip()
+    endpoint = (os.getenv(AGENTPAY_ENDPOINT_ENV) or "").strip()
+    prices = (os.getenv(AGENTPAY_PRICES_ENV) or "N/A").strip()
+    return caps, endpoint, prices
+
+
+def get_ens_registration_quote(
+    label: str,
+    duration_years: float = 1.0,
+    rpc_url: Optional[str] = None,
+) -> Tuple[int, str]:
+    """
+    Get the ETH (wei) needed to register a .eth name on Sepolia and a short message for the user.
+
+    Returns (total_wei_to_send, message). Use the message to prompt the human: "Send X ETH to <address> to register."
+    The label is the name the user/bot chose (e.g. from AGENTPAY_ENS_NAME or user input).
+    """
+    label = label.strip().lower().removesuffix(".eth")
+    if not label or len(label) < 3:
+        return 0, "Label must be at least 3 characters."
+    
+    rpc_urls = [rpc_url] if rpc_url else SEPOLIA_RPCS
+    try:
+        w3 = _connect_multiple(rpc_urls)
+    except Exception as e:
+        return 0, f"Failed to connect to RPC: {e}"
+    
+    controller = w3.eth.contract(
+        address=Web3.to_checksum_address(ETH_REGISTRAR_CONTROLLER),
+        abi=CONTROLLER_ABI,
+    )
+    duration_seconds = int(duration_years * 365 * 24 * 3600)
+    if duration_seconds < 28 * 24 * 3600:
+        duration_seconds = 28 * 24 * 3600  # at least 28 days
+    
+    try:
+        price = controller.functions.rentPrice(label, duration_seconds).call()
+        base, premium = price[0], price[1]
+        rent_wei = base + premium
+        total_price_with_buffer = int(rent_wei * 1.05)  # 5% buffer
+        gas_buffer = 500_000 * 30 * 10**9  # ~0.015 ETH at 30 gwei
+        total = total_price_with_buffer + gas_buffer
+        eth_str = f"{total / 10**18:.4f}"
+        return total, f"Send at least {eth_str} ETH (Sepolia) to your agent address to register '{label}.eth'. Faucet: https://sepoliafaucet.com"
+    except Exception as e:
+        return 0, f"Failed to get registration quote: {e}"
+
+
+def register_and_provision_ens(
+    wallet: AgentWallet,
+    label: str,
+    capabilities: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    prices: Optional[str] = None,
+    duration_years: float = 1.0,
+    rpc_url: Optional[str] = None,
+    mainnet: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Register ENS name and automatically provision it with agent identity.
+    
+    This is the recommended flow for agents: register + provision in one call.
+    ENS domain is prefilled from label; capabilities/endpoint/prices can come from
+    env (AGENTPAY_CAPABILITIES, AGENTPAY_ENDPOINT, AGENTPAY_PRICES) if not passed.
+    
+    Args:
+        wallet: Agent wallet (must be funded with ETH)
+        label: ENS name without .eth suffix (e.g. "myagent")
+        capabilities: Comma-separated capabilities; if None, uses AGENTPAY_CAPABILITIES env
+        endpoint: Worker endpoint URL; if None, uses AGENTPAY_ENDPOINT env
+        prices: Price string; if None, uses AGENTPAY_PRICES env or "N/A"
+        duration_years: Registration duration in years (default 1.0)
+        rpc_url: Optional RPC URL
+        mainnet: If True, use mainnet (default False for Sepolia)
+    
+    Returns:
+        (True, "label.eth") on success, or (False, error_message) on failure
+    """
+    # Resolve capabilities/endpoint/prices from env when not passed
+    caps, ep, pr = get_agent_provisioning_from_env()
+    capabilities = capabilities if capabilities is not None else caps
+    endpoint = endpoint if endpoint is not None else ep
+    prices = prices if prices is not None else pr
+
+    # Step 1: Register ENS name (convert years to seconds)
+    duration_seconds = int(duration_years * 365 * 24 * 3600)
+    ok, result = register_ens_name(
+        wallet,
+        label,
+        duration_seconds=duration_seconds,
+        rpc_url=rpc_url,
+        set_reverse_record=False,
+    )
+    if not ok:
+        return False, f"Registration failed: {result}"
+    
+    ens_name = result  # Should be "label.eth"
+    
+    # Step 2: Provision identity (set text records)
+    # Wait a moment for registration to propagate
+    print("\n⏳ Waiting 2s for registration to propagate...")
+    time.sleep(2)
+    
+    ok, msg = provision_ens_identity(
+        wallet,
+        ens_name,
+        capabilities=capabilities,
+        endpoint=endpoint,
+        prices=prices,
+        rpc_url=rpc_url,
+    )
+    if not ok:
+        return False, f"Registration succeeded but provisioning failed: {msg}"
+    
+    print(f"\n🎉 Complete! '{ens_name}' is registered and provisioned.")
+    return True, ens_name
+
+
+def register_and_provision_ens_from_env(
+    wallet: AgentWallet,
+    label: Optional[str] = None,
+    duration_years: float = 1.0,
+    rpc_url: Optional[str] = None,
+    mainnet: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Register ENS name and provision from env config. One-shot for agents.
+    
+    Uses AGENTPAY_ENS_NAME (or label), AGENTPAY_CAPABILITIES, AGENTPAY_ENDPOINT,
+    AGENTPAY_PRICES. Agent/deployer sets these once; then call with just wallet.
+    ENS domain is prefilled; capabilities/endpoint/prices come from env.
+    
+    Returns (True, "label.eth") on success, or (False, error_message) on failure.
+    """
+    label = (label or get_ens_name_for_registration() or "").strip().lower().removesuffix(".eth")
+    if not label or len(label) < 3:
+        return False, "Set AGENTPAY_ENS_NAME or pass label (min 3 chars)."
+    return register_and_provision_ens(
+        wallet,
+        label,
+        capabilities=None,
+        endpoint=None,
+        prices=None,
+        duration_years=duration_years,
+        rpc_url=rpc_url,
+        mainnet=mainnet,
+    )
+
+
+def setup_new_agent(ens_name: Optional[str] = None) -> Tuple[AgentWallet, str]:
+    """
+    Helper function for new users: generates a wallet, shows setup instructions.
+    
+    This is the recommended flow for new users:
+    1. Call setup_new_agent("myagent") → generates keypair, shows address
+    2. User saves the private key to CLIENT_PRIVATE_KEY env var
+    3. User sends ETH to the address (from get_ens_registration_quote)
+    4. User calls register_and_provision_ens(wallet, "myagent", ...)
+    
+    Args:
+        ens_name: Optional ENS name to register (from AGENTPAY_ENS_NAME if not provided)
+    
+    Returns:
+        (wallet, instructions_message) - wallet is ready to use after user sets env var
+    """
+    from agentpay.wallet import generate_keypair
+    
+    # Generate new keypair
+    account = generate_keypair()
+    private_key_hex = account.key.hex()
+    address = account.address
+    
+    # Get ENS name
+    label = ens_name or get_ens_name_for_registration() or "myagent"
+    label = label.strip().lower().removesuffix(".eth")
+    
+    # Get registration quote
+    try:
+        total_wei, quote_msg = get_ens_registration_quote(label, duration_years=1.0)
+        eth_amount = f"{total_wei / 10**18:.4f}"
+    except Exception:
+        eth_amount = "~0.002"  # fallback estimate
+        quote_msg = f"Send at least {eth_amount} ETH (Sepolia) to register '{label}.eth'"
+    
+    # Create wallet (user will need to set env var to use it)
+    wallet = AgentWallet(account=account)
+    
+    instructions = f"""
+╔═══════════════════════════════════════════════════════════════╗
+║  AgentPay Setup - Save Your Private Key Securely!            ║
+╚═══════════════════════════════════════════════════════════════╝
+
+Your agent wallet has been generated:
+
+  Address: {address}
+  Private Key: {private_key_hex}
+
+⚠️  IMPORTANT: Save your private key immediately!
+
+  export CLIENT_PRIVATE_KEY={private_key_hex}
+  export AGENTPAY_ENS_NAME={label}
+
+Next steps:
+
+1. SAVE YOUR PRIVATE KEY
+   Copy this command and run it in your terminal:
+   export CLIENT_PRIVATE_KEY={private_key_hex}
+
+2. FUND YOUR WALLET
+   Your wallet needs money to pay for things:
+   
+   a) Send ETH (for gas fees and ENS registration):
+      - Amount: {eth_amount} ETH
+      - Send to: {address}
+      - Get free ETH: https://sepoliafaucet.com
+      - (Paste your address {address}, click "Send Me ETH")
+   
+   b) Get Yellow test tokens (for paying workers):
+      - Run this command in your terminal:
+        curl -X POST https://clearnet-sandbox.yellow.com/faucet/requestTokens \\
+             -H "Content-Type: application/json" \\
+             -d '{{"userAddress":"{address}"}}'
+      - Or if you have yellow_test set up: cd yellow_test && PRIVATE_KEY={private_key_hex} npm run faucet
+      - This gives you test money (ytest.usd) to pay workers
+
+3. REGISTER YOUR AGENT NAME AND ENDPOINT
+   After your wallet has ETH, register your agent's name and where to send jobs:
+   
+   python3 -c "
+   from agentpay import AgentWallet, register_and_provision_ens
+   wallet = AgentWallet()
+   ok, name = register_and_provision_ens(
+       wallet,
+       '{label}',
+       capabilities='analyze-data,summarize',
+       endpoint='http://localhost:8000',
+       prices='0.05 USDC per job'
+   )
+   print('Registered:', name if ok else 'Failed: ' + name)
+   "
+   
+   What this does:
+   - Registers "{label}.eth" as your agent's name
+   - Sets up your "resume" (what you can do, your prices, where to send jobs)
+   - Other agents can now find and hire you by name
+
+4. START YOUR WORKER
+   Once registered, start your worker server (in a separate terminal):
+   
+   export AGENTPAY_WORKER_WALLET={address}
+   export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}
+   export AGENTPAY_PAYMENT_METHOD=yellow_full
+   python3 agentpay/examples/worker_server.py
+   
+   Your worker is now running and ready to receive jobs!
+
+5. TEST IT WORKS
+   In another terminal, hire your own agent to test:
+   
+   export CLIENT_PRIVATE_KEY={private_key_hex}
+   export WORKER_ENS_NAME={label}.eth
+   python3 agentpay/examples/yellow_e2e.py
+   
+   This will:
+   - Find your agent by ENS name
+   - Send a job
+   - Pay via Yellow
+   - Get the result back
+
+╚═══════════════════════════════════════════════════════════════╝
+"""
+    
+    print(instructions)
+    return wallet, instructions
