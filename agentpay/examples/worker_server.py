@@ -171,6 +171,27 @@ def verify_payment_yellow(
         return False, f"PAYMENT_YELLOW_ERROR:{type(e).__name__}:{str(e)}"
 
 
+def verify_payment_yellow_full(
+    proof: str, recipient: str, amount_usdc: float, client_address_for_job: Optional[str] = None
+) -> tuple[bool, str]:
+    """Verify yellow_full: session (worker signs) + on-chain tx. Proof format: yellow_full|yellow|session_id|version|tx_hash."""
+    proof = (proof or "").strip()
+    if not proof.startswith("yellow_full|"):
+        return False, "PAYMENT_INVALID_YELLOW_FULL"
+    parts = proof.split("|")
+    if len(parts) < 5:
+        return False, "PAYMENT_YELLOW_FULL_BAD_FORMAT"
+    session_proof = f"{parts[1]}|{parts[2]}|{parts[3]}"
+    tx_hash = parts[4].strip()
+    ok, reason = verify_payment_yellow(session_proof, amount_usdc, client_address_for_job)
+    if not ok:
+        return False, reason
+    ok2, reason2 = verify_payment_onchain(tx_hash, recipient, amount_usdc)
+    if not ok2:
+        return False, reason2
+    return True, ""
+
+
 def verify_payment(
     proof: str,
     recipient: str,
@@ -178,7 +199,9 @@ def verify_payment(
     payment_method: str,
     client_address_for_job: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Verify payment. yellow_channel = tx hash (on-chain). yellow = session proof."""
+    """Verify payment. yellow_channel = tx hash. yellow = session. yellow_full = session + tx."""
+    if payment_method == "yellow_full" or (proof and proof.strip().startswith("yellow_full|")):
+        return verify_payment_yellow_full(proof, recipient, amount_usdc, client_address_for_job)
     if payment_method == "yellow_channel" or (proof and proof.strip().startswith("0x") and len(proof.strip()) == 66):
         return verify_payment_onchain(proof, recipient, amount_usdc)
     if payment_method == "yellow":
@@ -204,8 +227,8 @@ async def submit_job(request: Request):
     payment_proof = request.headers.get("X-Payment")
     if not payment_proof:
         print("[WORKER] Job received. Sending invoice (402).")
-        if PAYMENT_METHOD == "yellow" and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
-            return Response(status_code=503, content="Yellow session needs AGENTPAY_WORKER_PRIVATE_KEY.")
+        if PAYMENT_METHOD in ("yellow", "yellow_full") and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
+            return Response(status_code=503, content="Yellow session/full needs AGENTPAY_WORKER_PRIVATE_KEY.")
         return Response(
             status_code=402,
             content=Bill(
@@ -222,7 +245,9 @@ async def submit_job(request: Request):
     payment_method = PAYMENT_METHOD
     if payment_proof:
         p = payment_proof.strip()
-        if p.startswith("yellow|") or p.startswith("session:"):
+        if p.startswith("yellow_full|"):
+            payment_method = "yellow_full"
+        elif p.startswith("yellow|") or p.startswith("session:"):
             payment_method = "yellow"
         elif p.startswith("0x") and len(p) == 66:
             payment_method = "yellow_channel"

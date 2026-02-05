@@ -1,8 +1,11 @@
 """
-E2E: Client pays via Yellow channel (on-chain). For moltbot / HackMoney.
+E2E: Client pays via Yellow. For moltbot / HackMoney.
 
-Terminal 1 (worker): AGENTPAY_WORKER_WALLET=0x... (or worker key). Run worker_server.py
-Terminal 2 (client): CLIENT_PRIVATE_KEY=0x... + ytest.usd + Sepolia ETH. Run this script.
+Payment method comes from worker (402 Bill). Use yellow_channel (on-chain only) or
+yellow_full (session + channel = full prize demo).
+
+Terminal 1 (worker): AGENTPAY_WORKER_WALLET=0x..., AGENTPAY_PAYMENT_METHOD=yellow_full (or yellow_channel)
+Terminal 2 (client): CLIENT_PRIVATE_KEY=0x... + ytest.usd + Sepolia ETH. Optional: AGENTPAY_CLIENT_ADDRESS for session.
 """
 
 import os
@@ -15,7 +18,6 @@ if "agentpay" not in sys.modules:
         sys.path.insert(0, str(_root))
 
 from agentpay import Job, AgentWallet, request_job
-from agentpay.payments import get_pay_fn
 
 
 def main():
@@ -33,9 +35,9 @@ def main():
     endpoint = os.getenv("WORKER_ENDPOINT", "http://localhost:8000/submit-job")
 
     print("[CLIENT] Sending job to worker...")
-    pay_fn = get_pay_fn("yellow_channel")
+    # pay_fn=None: flow uses worker's 402 Bill payment_method (yellow_channel or yellow_full)
     try:
-        result = request_job(job, endpoint, wallet, pay_fn=pay_fn)
+        result = request_job(job, endpoint, wallet, pay_fn=None)
         print("[CLIENT] ---")
         print("[CLIENT] Status:", result.status)
         if result.result:
@@ -46,7 +48,10 @@ def main():
         if result.error:
             print("[CLIENT] Error:", result.error)
         if result.status == "completed":
-            print("[CLIENT] OK – job done, payment on-chain.")
+            if getattr(result, "yellow_session_id", None) and getattr(result, "payment_tx_hash", None):
+                print("[CLIENT] OK – job done (session + on-chain settlement).")
+            else:
+                print("[CLIENT] OK – job done, payment on-chain.")
     except Exception as e:
         print("[CLIENT] Error:", e)
         import traceback
