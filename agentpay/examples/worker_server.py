@@ -1,26 +1,8 @@
 """
-Minimal worker server: 402 flow.
+Worker: 402 + Yellow. No X-Payment → 402 + Bill. With X-Payment (tx hash) → verify, work, result.
 
-Run from agentpay directory:
-  pip install -e .   # if you have pip that supports pyproject editable install
-  python examples/worker_server.py
-If you get ModuleNotFoundError: No module named 'agentpay', run from repo root instead:
-  cd /path/to/cuttlefish2 && PYTHONPATH=agentpay python agentpay/examples/worker_server.py
-(That puts agentpay's parent on the path so import agentpay finds the agentpay folder.)
-
-POST /submit-job with Job payload.
-- No X-Payment → 402 + Bill (with payment_method: "yellow" or "onchain")
-- With X-Payment (tx_hash or Yellow session proof) → verify payment, do work, return JobResult
-
-For Yellow payments:
-- Client creates session (quorum 2) and submits state (client signs)
-- Worker receives session proof → calls sign_state_worker to add second signature
-- Both signatures applied → payment verified
-
-Env for Yellow:
-- AGENTPAY_WORKER_PRIVATE_KEY: Worker's private key (worker signs the state).
-- AGENTPAY_CLIENT_ADDRESS: Client's 0x address (needed to build state allocations: client 0, worker amount).
-  Not the other way around: worker has its own key; worker needs client's *address* (not key) for the state.
+Default: yellow_channel (on-chain). Env: AGENTPAY_WORKER_WALLET or AGENTPAY_WORKER_PRIVATE_KEY.
+Run from repo root: python3 agentpay/examples/worker_server.py
 """
 
 import os
@@ -75,8 +57,8 @@ def _client_address_for_job(requester: str) -> str:
 CLIENT_ADDRESS = os.getenv("AGENTPAY_CLIENT_ADDRESS")
 JOB_PRICE_USDC = 0.05
 CHAIN_ID = 11155111
-# MVP: Yellow only (prize track). On-chain removed from default path.
-PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow")
+# Yellow only. Channel = on-chain settlement (HackMoney / DeFi).
+PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_channel")
 
 # Path to bridge.ts
 BRIDGE_TS = Path(__file__).parent.parent.parent / "yellow_test" / "bridge.ts"
@@ -196,7 +178,9 @@ def verify_payment(
     payment_method: str,
     client_address_for_job: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Verify payment. For Yellow, client_address_for_job can be job.requester."""
+    """Verify payment. yellow_channel = tx hash (on-chain). yellow = session proof."""
+    if payment_method == "yellow_channel" or (proof and proof.strip().startswith("0x") and len(proof.strip()) == 66):
+        return verify_payment_onchain(proof, recipient, amount_usdc)
     if payment_method == "yellow":
         return verify_payment_yellow(proof, amount_usdc, client_address_for_job)
     return verify_payment_onchain(proof, recipient, amount_usdc)
@@ -219,41 +203,40 @@ async def submit_job(request: Request):
     )
     payment_proof = request.headers.get("X-Payment")
     if not payment_proof:
+        print("[WORKER] Job received. Sending invoice (402).")
         if PAYMENT_METHOD == "yellow" and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
-            return Response(
-                status_code=503,
-                content="Yellow requires AGENTPAY_WORKER_PRIVATE_KEY (worker key). Set it and restart.",
-            )
+            return Response(status_code=503, content="Yellow session needs AGENTPAY_WORKER_PRIVATE_KEY.")
         return Response(
             status_code=402,
             content=Bill(
                 amount=JOB_PRICE_USDC,
                 recipient=WORKER_WALLET,
                 chain_id=CHAIN_ID,
-                message=f"Pay {JOB_PRICE_USDC} USDC for {job.task_type}",
+                message=f"Pay {JOB_PRICE_USDC} for {job.task_type}",
                 payment_method=PAYMENT_METHOD,
             ).model_dump_json(),
             media_type="application/json",
         )
     
-    # Determine payment method from proof format or default (MVP: Yellow only)
+    # Yellow only. Tx hash = channel (on-chain). yellow|... = session.
     payment_method = PAYMENT_METHOD
     if payment_proof:
         p = payment_proof.strip()
         if p.startswith("yellow|") or p.startswith("session:"):
             payment_method = "yellow"
         elif p.startswith("0x") and len(p) == 66:
-            payment_method = "onchain"
+            payment_method = "yellow_channel"
     client_addr = _client_address_for_job(job.requester)
+    print("[WORKER] Payment proof received. Verifying...")
     ok, reason = verify_payment(
         payment_proof, WORKER_WALLET, JOB_PRICE_USDC, payment_method, client_addr
     )
     if not ok:
-        # Include first 60 chars of proof in response to help debug (no secrets)
         debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
         return Response(status_code=402, content=f"{reason} (received: {debug})")
-    # Do work (placeholder)
+    print("[WORKER] Payment verified. Doing work...")
     result = f"Worker completed {job.task_type} for {job.requester}"
+    print("[WORKER] Done. Returning result.")
     return {
         "status": "completed",
         "result": result,
