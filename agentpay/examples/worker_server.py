@@ -60,8 +60,12 @@ CHAIN_ID = 11155111
 # Yellow only. Channel = on-chain settlement (HackMoney / DeFi).
 PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_channel")
 
-# Path to bridge.ts
-BRIDGE_TS = Path(__file__).parent.parent.parent / "yellow_test" / "bridge.ts"
+def _bridge_path() -> Path:
+    """Path to bridge.ts. Prefer AGENTPAY_YELLOW_BRIDGE_DIR; else repo layout."""
+    env_dir = os.getenv("AGENTPAY_YELLOW_BRIDGE_DIR")
+    if env_dir:
+        return Path(env_dir).resolve() / "bridge.ts"
+    return Path(__file__).resolve().parent.parent.parent / "yellow_test" / "bridge.ts"
 
 ERC20_ABI = [
     {"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"},
@@ -153,11 +157,11 @@ def verify_payment_yellow(
             "version": version,
         }
         result = subprocess.run(
-            ["npx", "tsx", str(BRIDGE_TS)],
+            ["npx", "tsx", str(_bridge_path())],
             input=json.dumps(bridge_cmd),
             capture_output=True,
             text=True,
-            cwd=BRIDGE_TS.parent,
+            cwd=_bridge_path().parent,
             check=True,
             timeout=30,
         )

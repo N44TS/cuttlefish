@@ -1,11 +1,11 @@
 """
-E2E: Client pays via Yellow. For moltbot / HackMoney.
+E2E: Client hires worker (by ENS or URL), pays via Yellow. For moltbot / HackMoney.
 
-Payment method comes from worker (402 Bill). Use yellow_channel (on-chain only) or
-yellow_full (session + channel = full prize demo).
+Set WORKER_ENS_NAME=worker.eth to resolve endpoint from ENS (hire_agent).
+Else uses WORKER_ENDPOINT or http://localhost:8000/submit-job (request_job).
 
 Terminal 1 (worker): AGENTPAY_WORKER_WALLET=0x..., AGENTPAY_PAYMENT_METHOD=yellow_full (or yellow_channel)
-Terminal 2 (client): CLIENT_PRIVATE_KEY=0x... + ytest.usd + Sepolia ETH. Optional: AGENTPAY_CLIENT_ADDRESS for session.
+Terminal 2 (client): CLIENT_PRIVATE_KEY=0x... + ytest.usd + Sepolia ETH. Optional: AGENTPAY_CLIENT_ADDRESS, WORKER_ENS_NAME.
 """
 
 import os
@@ -17,7 +17,7 @@ if "agentpay" not in sys.modules:
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
 
-from agentpay import Job, AgentWallet, request_job
+from agentpay import Job, AgentWallet, request_job, hire_agent
 
 
 def main():
@@ -26,18 +26,31 @@ def main():
         return
 
     wallet = AgentWallet()
-    job = Job(
-        job_id="yellow_job_001",
-        requester=wallet.address,
-        task_type="analyze-data",
-        input_data={"query": "Summarize this document"},
-    )
+    task_type = "analyze-data"
+    input_data = {"query": "Summarize this document"}
+
+    worker_ens = os.getenv("WORKER_ENS_NAME", "").strip()
     endpoint = os.getenv("WORKER_ENDPOINT", "http://localhost:8000/submit-job")
 
-    print("[CLIENT] Sending job to worker...")
-    # pay_fn=None: flow uses worker's 402 Bill payment_method (yellow_channel or yellow_full)
     try:
-        result = request_job(job, endpoint, wallet, pay_fn=None)
+        if worker_ens:
+            print("[CLIENT] Resolving worker via ENS:", worker_ens)
+            result = hire_agent(
+                wallet,
+                task_type=task_type,
+                input_data=input_data,
+                worker_ens_name=worker_ens,
+                job_id="yellow_job_001",
+            )
+        else:
+            print("[CLIENT] Sending job to worker (URL)...")
+            job = Job(
+                job_id="yellow_job_001",
+                requester=wallet.address,
+                task_type=task_type,
+                input_data=input_data,
+            )
+            result = request_job(job, endpoint, wallet, pay_fn=None)
         print("[CLIENT] ---")
         print("[CLIENT] Status:", result.status)
         if result.result:

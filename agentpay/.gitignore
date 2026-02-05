@@ -1,0 +1,22 @@
+# AgentPay key storage
+.agentpay_keys/
+agent_key.json
+**/agent_key.json
+.agentpay/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.idea/
+.DS_Store
+*.swp
+*.swo

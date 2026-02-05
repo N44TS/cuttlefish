@@ -1,7 +1,8 @@
 """
 Agent wallet: local keypair, no API keys.
 
-Key is loaded only from AGENTPAY_PRIVATE_KEY (env). Never read/write a key file.
+Key is loaded from CLIENT_PRIVATE_KEY (env); AGENTPAY_PRIVATE_KEY is accepted as fallback.
+Never read/write a key file.
 """
 
 import os
@@ -14,7 +15,9 @@ from web3 import Web3
 
 Account.enable_unaudited_hdwallet_features()
 
-ENV_PRIVATE_KEY = "AGENTPAY_PRIVATE_KEY"
+# Prefer CLIENT_PRIVATE_KEY so it's clear this is the client's key (not worker's).
+ENV_PRIVATE_KEY = "CLIENT_PRIVATE_KEY"
+ENV_PRIVATE_KEY_LEGACY = "AGENTPAY_PRIVATE_KEY"
 
 
 def generate_keypair() -> LocalAccount:
@@ -24,13 +27,13 @@ def generate_keypair() -> LocalAccount:
 
 def load_or_create_key(key_path: Optional[Path] = None, save: bool = True) -> LocalAccount:
     """
-    Load key from AGENTPAY_PRIVATE_KEY env only. Never reads or writes a file.
-    Raises RuntimeError if env is not set.
+    Load key from CLIENT_PRIVATE_KEY (or AGENTPAY_PRIVATE_KEY) env. Never reads or writes a file.
+    Raises RuntimeError if neither env is set.
     """
-    pk_env = os.getenv(ENV_PRIVATE_KEY)
+    pk_env = os.getenv(ENV_PRIVATE_KEY) or os.getenv(ENV_PRIVATE_KEY_LEGACY)
     if not pk_env or not pk_env.strip():
         raise RuntimeError(
-            "Set AGENTPAY_PRIVATE_KEY in the environment (never commit it). "
+            "Set CLIENT_PRIVATE_KEY in the environment (never commit it). "
             "Generate one: python -c \"from eth_account import Account; a = Account.create(); print(a.key.hex())\""
         )
     pk = pk_env.strip()
@@ -41,7 +44,7 @@ def load_or_create_key(key_path: Optional[Path] = None, save: bool = True) -> Lo
 
 class AgentWallet:
     """
-    Wallet for an AI agent. Key is loaded only from AGENTPAY_PRIVATE_KEY (env).
+    Wallet for an AI agent. Key is loaded from CLIENT_PRIVATE_KEY (env); AGENTPAY_PRIVATE_KEY accepted as fallback.
     Never reads or writes a key file.
     """
 
@@ -83,5 +86,5 @@ class AgentWallet:
 
     @classmethod
     def from_key_file(cls, path: Path) -> "AgentWallet":
-        """Deprecated: key must be in env. Set AGENTPAY_PRIVATE_KEY and use AgentWallet()."""
-        raise RuntimeError("Private key must be in AGENTPAY_PRIVATE_KEY env only; do not use key files.")
+        """Deprecated: key must be in env. Set CLIENT_PRIVATE_KEY and use AgentWallet()."""
+        raise RuntimeError("Private key must be in CLIENT_PRIVATE_KEY env only; do not use key files.")

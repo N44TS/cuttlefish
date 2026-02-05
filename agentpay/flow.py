@@ -4,10 +4,13 @@
 Worker returns 402 + Bill; requester pays; requester resubmits with
 X-Payment: <tx_hash or proof>; worker verifies and returns JobResult.
 Optionally the requester creates an EAS review (attestation) after success.
+
+ENS integration: request_job_by_ens (resolve worker by ENS name) and
+hire_agent (discover by capability or by ENS name, then run 402 flow).
 """
 
 import os
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 import time
@@ -155,3 +158,138 @@ def request_job(
         except Exception:
             pass  # Don't fail the whole result if review creation fails
     return result
+
+
+def _submit_job_url(endpoint: str) -> str:
+    """Ensure endpoint is a full URL to the submit-job path."""
+    endpoint = (endpoint or "").strip().rstrip("/")
+    if not endpoint:
+        raise ValueError("Worker endpoint is empty")
+    if "submit-job" not in endpoint:
+        endpoint = endpoint + "/submit-job"
+    if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+        endpoint = "https://" + endpoint
+    return endpoint
+
+
+def request_job_by_ens(
+    worker_ens_name: str,
+    job: Job,
+    wallet: AgentWallet,
+    rpc_url: Optional[str] = None,
+    mainnet: bool = False,
+    pay_fn: Optional[Callable[[Bill, AgentWallet], str]] = None,
+    headers: Optional[dict] = None,
+    create_review: bool = True,
+) -> JobResult:
+    """
+    Resolve worker by ENS name, then run the 402 flow (pay, resubmit, result).
+
+    Looks up agentpay.endpoint from ENS text records. If the record is a base URL,
+    appends /submit-job. Use this when you know the worker's ENS name.
+
+    worker_ens_name: e.g. "worker.eth" or "search.service.eth"
+    job: Job to send
+    wallet: Requester wallet (pays the bill)
+    rpc_url, mainnet: Passed to get_agent_info for ENS resolution (Sepolia by default)
+    """
+    from agentpay.ens import get_agent_info
+
+    info = get_agent_info(worker_ens_name, rpc_url=rpc_url, mainnet=mainnet)
+    if not info:
+        return JobResult(status="error", error=f"ENS lookup failed: no agent info for {worker_ens_name}")
+    endpoint = info.get("endpoint") or ""
+    if not endpoint.strip():
+        return JobResult(
+            status="error",
+            error=f"Agent {worker_ens_name} has no agentpay.endpoint set in ENS",
+        )
+    submit_url = _submit_job_url(endpoint)
+    return request_job(
+        job,
+        submit_url,
+        wallet,
+        pay_fn=pay_fn,
+        headers=headers,
+        create_review=create_review,
+    )
+
+
+def hire_agent(
+    wallet: AgentWallet,
+    task_type: str,
+    input_data: Dict[str, Any],
+    worker_ens_name: Optional[str] = None,
+    capability: Optional[str] = None,
+    known_agents: Optional[List[str]] = None,
+    job_id: Optional[str] = None,
+    requester: Optional[str] = None,
+    price_usdc: Optional[float] = None,
+    rpc_url: Optional[str] = None,
+    mainnet: bool = False,
+    pay_fn: Optional[Callable[[Bill, AgentWallet], str]] = None,
+    headers: Optional[dict] = None,
+    create_review: bool = True,
+) -> JobResult:
+    """
+    Discover worker via ENS (by name or by capability), then run 402 flow. One entry point for "hire and pay."
+
+    Call with either:
+      - worker_ens_name="worker.eth"  → resolve endpoint from ENS, send job, pay, get result.
+      - capability="analyze", known_agents=["a.eth","b.eth"]  → discover_agents, pick first match, same flow.
+
+    wallet: Requester wallet (pays the bill).
+    task_type: e.g. "analyze-data", "summarize".
+    input_data: Job input (dict).
+    job_id: Optional; default is generated from task_type + simple id.
+    requester: Optional; default is wallet.address.
+    """
+    import secrets
+    from agentpay.ens import discover_agents, get_agent_info
+
+    if worker_ens_name:
+        info = get_agent_info(worker_ens_name, rpc_url=rpc_url, mainnet=mainnet)
+        if not info:
+            return JobResult(status="error", error=f"ENS lookup failed: no agent info for {worker_ens_name}")
+        agent_name = worker_ens_name
+        endpoint = (info.get("endpoint") or "").strip()
+        if not endpoint:
+            return JobResult(
+                status="error",
+                error=f"Agent {worker_ens_name} has no agentpay.endpoint set in ENS",
+            )
+        submit_url = _submit_job_url(endpoint)
+    elif capability is not None and known_agents:
+        matches = discover_agents(capability, known_agents, rpc_url=rpc_url, mainnet=mainnet)
+        if not matches:
+            return JobResult(
+                status="error",
+                error=f"No agent found for capability '{capability}' in known_agents ({len(known_agents)} names)",
+            )
+        info = matches[0]
+        agent_name = info.get("name") or "unknown"
+        endpoint = (info.get("endpoint") or "").strip()
+        if not endpoint:
+            return JobResult(status="error", error=f"Agent {agent_name} has no agentpay.endpoint set in ENS")
+        submit_url = _submit_job_url(endpoint)
+    else:
+        return JobResult(
+            status="error",
+            error="Provide either worker_ens_name or both capability and known_agents",
+        )
+
+    job = Job(
+        job_id=job_id or f"{task_type}-{secrets.token_hex(4)}",
+        requester=requester or wallet.address,
+        task_type=task_type,
+        input_data=input_data,
+        price_usdc=price_usdc,
+    )
+    return request_job(
+        job,
+        submit_url,
+        wallet,
+        pay_fn=pay_fn,
+        headers=headers,
+        create_review=create_review,
+    )
