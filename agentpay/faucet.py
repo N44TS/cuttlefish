@@ -25,20 +25,40 @@ AUTO_FUND_TESTNET = os.getenv("AGENTPAY_AUTO_FUND_TESTNET", "false").lower() == 
 def check_eth_balance(wallet: AgentWallet, w3: Optional[Web3] = None) -> Tuple[float, bool]:
     """
     Check ETH balance. Returns (balance_eth, has_sufficient).
+    Gracefully handles network errors (returns 0.0, False if can't check).
     """
-    if w3 is None:
-        w3 = Web3(Web3.HTTPProvider("https://sepolia.ethereum.io"))
-    
-    balance_wei = w3.eth.get_balance(wallet.address)
-    balance_eth = balance_wei / 10**18
-    has_sufficient = balance_wei >= MIN_ETH_WEI
-    
-    return balance_eth, has_sufficient
+    try:
+        if w3 is None:
+            # Use same RPC as rest of SDK (publicnode.com is reliable)
+            rpc_url = os.getenv("AGENTPAY_SEPOLIA_RPC") or os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        
+        # Test RPC connection
+        try:
+            w3.eth.block_number  # Quick connectivity test
+        except Exception as rpc_err:
+            # RPC not available - return 0 but log for debugging
+            if os.getenv("AGENTPAY_DEBUG"):
+                print(f"⚠️  RPC unavailable ({rpc_url}): {rpc_err}")
+            return 0.0, False
+        
+        balance_wei = w3.eth.get_balance(wallet.address)
+        balance_eth = balance_wei / 10**18
+        has_sufficient = balance_wei >= MIN_ETH_WEI
+        
+        return balance_eth, has_sufficient
+    except Exception as e:
+        # Network error or RPC unavailable - can't check balance
+        # Return False so user is prompted, but don't crash
+        if os.getenv("AGENTPAY_DEBUG"):
+            print(f"⚠️  Balance check error: {e}")
+        return 0.0, False
 
 
 def check_yellow_balance(wallet: AgentWallet) -> Tuple[Optional[float], bool]:
     """
     Check Yellow ytest.usd balance. Returns (balance_usd, has_sufficient) or (None, False) if can't check.
+    Gracefully handles errors (network, bridge unavailable, etc.).
     """
     try:
         from agentpay.payments.yellow import steps_1_to_3
@@ -51,6 +71,7 @@ def check_yellow_balance(wallet: AgentWallet) -> Tuple[Optional[float], bool]:
                 return amount_usd, has_sufficient
         return 0.0, False
     except Exception:
+        # Bridge unavailable, network error, etc. - can't check
         return None, False
 
 
@@ -107,11 +128,16 @@ def ensure_funded(
     if auto_fund is None:
         auto_fund = AUTO_FUND_TESTNET and network == "sepolia"
     
-    # Check ETH balance
+    # Check ETH balance (gracefully handles network errors)
     eth_balance, eth_ok = check_eth_balance(wallet)
     
-    # Check Yellow balance (testnet only)
+    # Check Yellow balance (testnet only, gracefully handles errors)
     yellow_balance, yellow_ok = check_yellow_balance(wallet) if network == "sepolia" else (None, True)
+    
+    # If we can't check balances (network error), assume needs funding to be safe
+    if eth_balance == 0.0 and not eth_ok:
+        # Network error - can't verify, so prompt user
+        eth_ok = False
     
     if eth_ok and yellow_ok:
         return True, f"✅ Wallet funded: {eth_balance:.6f} ETH" + (f", {yellow_balance:.2f} ytest.usd" if yellow_balance is not None else "")
@@ -127,7 +153,8 @@ def ensure_funded(
     
     if needs_yellow:
         yellow_needed = MIN_YTEST_USD_UNITS / 1_000_000
-        messages.append(f"ytest.usd: {yellow_balance:.2f if yellow_balance is not None else 0} (need ~{yellow_needed:.2f})")
+        yellow_display = f"{yellow_balance:.2f}" if yellow_balance is not None else "0.00"
+        messages.append(f"ytest.usd: {yellow_display} (need ~{yellow_needed:.2f})")
     
     message = f"⚠️  Wallet needs funding:\n  " + "\n  ".join(messages)
     message += f"\n  Address: {wallet.address}"
@@ -191,7 +218,8 @@ def prompt_funding_choice(wallet: AgentWallet, network: str = "sepolia") -> str:
     if not eth_ok:
         print(f"  ETH: {eth_balance:.6f} ETH (need ~{MIN_ETH_WEI / 10**18:.4f} ETH)")
     if network == "sepolia" and not yellow_ok:
-        print(f"  ytest.usd: {yellow_balance:.2f if yellow_balance is not None else 0} (need ~{MIN_YTEST_USD_UNITS / 1_000_000:.2f})")
+        yellow_display = f"{yellow_balance:.2f}" if yellow_balance is not None else "0.00"
+        print(f"  ytest.usd: {yellow_display} (need ~{MIN_YTEST_USD_UNITS / 1_000_000:.2f})")
     
     if network == "mainnet":
         print("\n🔒 MAINNET: Manual funding only.")

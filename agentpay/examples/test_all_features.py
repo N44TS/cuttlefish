@@ -71,8 +71,12 @@ def test_all_features():
     print("  Scenario: Client refuses to sign final payment after worker delivers work")
     print("  Worker submits dispute with last signed state + proof of delivery")
     if session_id:
+        # For yellow_chunked_full, we do 10 chunks by default, so version = 10 (last chunk)
+        # In a real dispute, the worker would know the last signed version from the session state
+        version = 10  # Default: 10 chunks = version 10 (pay_yellow_chunked_full uses chunks=10 by default)
+        
         # Simulate: worker delivered work, client signed up to 90% but refused final 10%
-        # Worker submits dispute with last signed state (90%) + proof of delivery
+        # Worker submits dispute with last signed state (version 10 = 100% of chunks) + proof of delivery
         last_signed_state = f"yellow_chunked|{session_id}|{version}"  # Last chunk worker signed
         dispute_ok = submit_dispute(
             session_id,

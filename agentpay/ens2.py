@@ -285,7 +285,24 @@ def register_ens_name(
     # Use w3.eth.account.sign_transaction like working version
     pk = wallet.account.key.hex()
     signed_commit = w3.eth.account.sign_transaction(commit_tx, pk)
-    commit_tx_hash = w3.eth.send_raw_transaction(signed_commit.rawTransaction)
+    # Handle both web3.py versions: rawTransaction (old) or raw_transaction (new)
+    if hasattr(signed_commit, 'raw_transaction'):
+        raw_tx = signed_commit.raw_transaction
+    elif hasattr(signed_commit, 'rawTransaction'):
+        raw_tx = signed_commit.rawTransaction
+    else:
+        raise RuntimeError("Signed transaction missing raw transaction data (neither raw_transaction nor rawTransaction found)")
+    
+    # Ensure it's bytes (HexBytes is fine, send_raw_transaction accepts it)
+    # But convert to bytes if needed for compatibility
+    if hasattr(raw_tx, '__bytes__'):
+        raw_tx_bytes = bytes(raw_tx)
+    elif isinstance(raw_tx, bytes):
+        raw_tx_bytes = raw_tx
+    else:
+        raw_tx_bytes = bytes(raw_tx)
+    
+    commit_tx_hash = w3.eth.send_raw_transaction(raw_tx_bytes)
     commit_receipt = w3.eth.wait_for_transaction_receipt(commit_tx_hash, timeout=300)
     if commit_receipt.get("status") != 1:
         return False, "Commit transaction failed."
@@ -319,8 +336,34 @@ def register_ens_name(
     })
     # Use w3.eth.account.sign_transaction like working version
     signed_register = w3.eth.account.sign_transaction(register_tx, pk)
-    register_tx_hash = w3.eth.send_raw_transaction(signed_register.rawTransaction)
-    register_receipt = w3.eth.wait_for_transaction_receipt(register_tx_hash, timeout=300)
+    # Handle both web3.py versions: rawTransaction (old) or raw_transaction (new)
+    # Try raw_transaction first (newer web3.py), then rawTransaction (older)
+    if hasattr(signed_register, 'raw_transaction'):
+        raw_tx = signed_register.raw_transaction
+    elif hasattr(signed_register, 'rawTransaction'):
+        raw_tx = signed_register.rawTransaction
+    else:
+        raise RuntimeError("Signed transaction missing raw transaction data (neither raw_transaction nor rawTransaction found)")
+    
+    # Ensure it's bytes (HexBytes is fine, send_raw_transaction accepts it)
+    # But convert to bytes if needed for compatibility
+    if hasattr(raw_tx, '__bytes__'):
+        raw_tx_bytes = bytes(raw_tx)
+    elif isinstance(raw_tx, bytes):
+        raw_tx_bytes = raw_tx
+    else:
+        raw_tx_bytes = bytes(raw_tx)
+    
+    print(f"   Sending registration transaction...", flush=True)
+    try:
+        register_tx_hash = w3.eth.send_raw_transaction(raw_tx_bytes)
+        print(f"   ✅ Tx hash: {register_tx_hash.hex()}", flush=True)
+        print(f"   ⏳ Waiting for confirmation (timeout: 300s)...", flush=True)
+        register_receipt = w3.eth.wait_for_transaction_receipt(register_tx_hash, timeout=300)
+        print(f"   ✅ Transaction confirmed (block: {register_receipt.get('blockNumber')})", flush=True)
+    except Exception as e:
+        print(f"   ❌ Error sending/waiting for transaction: {e}", flush=True)
+        raise
     if register_receipt.get("status") != 1:
         return False, "Register transaction failed."
 
@@ -397,7 +440,10 @@ def provision_ens_identity(
                 })
                 print("🔓 Reclaiming ownership from Base Registrar...")
                 signed = wallet.account.sign_transaction(reclaim_tx)
-                tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+                raw_tx = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+                if raw_tx is None:
+                    raise RuntimeError("Signed transaction missing raw transaction data")
+                tx_hash = w3.eth.send_raw_transaction(raw_tx)
                 _wait_receipt(w3, tx_hash, description="Reclaim ownership")
             else:
                 return False, f"Wallet does not own '{ens_name}' (registry owner: {owner})."
@@ -426,7 +472,10 @@ def provision_ens_identity(
             
             # Use wallet.account.sign_transaction (matches working ens.py)
             signed = wallet.account.sign_transaction(tx)
-            set_resolver_tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            raw_tx = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            if raw_tx is None:
+                raise RuntimeError("Signed transaction missing raw transaction data")
+            set_resolver_tx_hash = w3.eth.send_raw_transaction(raw_tx)
             _wait_receipt(w3, set_resolver_tx_hash, timeout=300, description="Set resolver")
             
             # Verify resolver was set
@@ -467,7 +516,10 @@ def provision_ens_identity(
             })
             # Use wallet.account.sign_transaction (matches working ens.py)
             signed = wallet.account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            raw_tx = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            if raw_tx is None:
+                raise RuntimeError("Signed transaction missing raw transaction data")
+            tx_hash = w3.eth.send_raw_transaction(raw_tx)
             _wait_receipt(w3, tx_hash, timeout=300, description=f"Set {key}")
     except RuntimeError as e:
         return False, str(e)
@@ -816,18 +868,7 @@ Next steps:
    After your wallet has ETH, register your agent's name and where to send jobs.
    Note: Full ENS registration (commit + register + provisioning) takes about 2.5 minutes; wait for it to complete.
    
-   python3 -c "
-   from agentpay import AgentWallet, register_and_provision_ens
-   wallet = AgentWallet()
-   ok, name = register_and_provision_ens(
-       wallet,
-       '{label}',
-       capabilities='analyze-data,summarize',
-       endpoint='http://localhost:8000',
-       prices='0.05 USDC per job'
-   )
-   print('Registered:', name if ok else 'Failed: ' + name)
-   "
+   python3 -c "from agentpay import AgentWallet, register_and_provision_ens; wallet = AgentWallet(); ok, name = register_and_provision_ens(wallet, '{label}', capabilities='analyze-data,summarize', endpoint='http://localhost:8000', prices='0.05 USDC per job'); print('Registered:', name if ok else 'Failed: ' + name)"
    
    What this does:
    - Registers "{label}.eth" as your agent's name

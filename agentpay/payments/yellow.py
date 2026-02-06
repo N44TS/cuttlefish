@@ -216,6 +216,7 @@ def pay_yellow_chunked(
     except RuntimeError:
         pass
     # Handshake: create session (quorum 2)
+    print("[CLIENT] Creating session (handshake)...", flush=True)
     create_cmd = {
         "command": "create_session",
         "client_private_key": private_key,
@@ -228,8 +229,10 @@ def pay_yellow_chunked(
     app_session_id = (response.get("data") or {}).get("app_session_id")
     if not app_session_id:
         raise RuntimeError("Bridge returned success but no app_session_id")
+    print(f"[CLIENT] Session created: {app_session_id[:18]}...", flush=True)
     sign_state_url = base.rstrip("/") + "/sign-state"
     version = 1
+    print(f"[CLIENT] Starting chunked micropayments ({chunks} chunks)...", flush=True)
     for i in range(1, chunks + 1):
         amount_cumulative = bill.amount * i / chunks
         amount_units = _to_units(amount_cumulative)
@@ -240,6 +243,7 @@ def pay_yellow_chunked(
             "worker_address": worker_addr,
             "amount": amount_units,
         }
+        print(f"[CLIENT] Submitting chunk {i}/{chunks} (cumulative: ${amount_cumulative:.4f})...", flush=True)
         response = _call_bridge(submit_cmd, timeout=30)
         if not response.get("success"):
             raise RuntimeError(f"Chunk {i} submit_state failed: {response.get('error')}")
@@ -257,6 +261,8 @@ def pay_yellow_chunked(
         )
         if r.status_code != 200:
             raise RuntimeError(f"Chunk {i} worker sign-state failed: {r.status_code} {r.text}")
+        print(f"[CLIENT] Chunk {i}/{chunks} signed by worker (version {version})", flush=True)
+    print(f"[CLIENT] ✅ Chunked micropayments complete ({chunks} chunks, final version {version})", flush=True)
     # Use yellow_chunked| so worker verifies without calling sign_state_worker again (already signed per chunk).
     return f"yellow_chunked|{app_session_id}|{version}"
 
@@ -300,6 +306,7 @@ def pay_yellow_chunked_full(
     Returns: yellow_chunked_full|session_id|version|tx_hash
     """
     # Step 1: Chunked micropayments (off-chain)
+    print("[CLIENT] Step 1: Chunked micropayments (off-chain)...", flush=True)
     chunked_proof = pay_yellow_chunked(bill, wallet, worker_base_url, chunks, worker_endpoint, **kwargs)
     # Parse: yellow_chunked|session_id|version
     parts = chunked_proof.split("|")
@@ -307,9 +314,12 @@ def pay_yellow_chunked_full(
         raise RuntimeError(f"Invalid chunked proof: {chunked_proof}")
     session_id = parts[1]
     version = parts[2]
+    print(f"[CLIENT] ✅ Step 1 complete: Session {session_id[:18]}... ({chunks} chunks, version {version})", flush=True)
     
     # Step 2: On-chain settlement (channel close)
+    print("[CLIENT] Step 2: On-chain settlement (channel close)...", flush=True)
     tx_hash = pay_yellow_channel(bill, wallet, worker_endpoint, **kwargs)
+    print(f"[CLIENT] ✅ Step 2 complete: Settlement tx {tx_hash[:18]}...", flush=True)
     
     return f"yellow_chunked_full|{session_id}|{version}|{tx_hash}"
 

@@ -1,7 +1,7 @@
 """
 Agent wallet: local keypair, no API keys.
 
-Key is loaded from CLIENT_PRIVATE_KEY (env); AGENTPAY_PRIVATE_KEY is accepted as fallback.
+Key is loaded from CLIENT_PRIVATE_KEY (env) or .env file; AGENTPAY_PRIVATE_KEY is accepted as fallback.
 Never read/write a key file.
 """
 
@@ -12,6 +12,24 @@ from typing import Optional
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 from web3 import Web3
+
+# Try to load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    # Load .env from current directory or parent directories (up to repo root)
+    _env_loaded = False
+    for _dir in [Path.cwd(), Path(__file__).parent, Path(__file__).parent.parent]:
+        _env_file = _dir / ".env"
+        if _env_file.exists():
+            load_dotenv(_env_file, override=False)  # Don't override existing env vars
+            _env_loaded = True
+            break
+    if not _env_loaded:
+        # Try loading from current directory as fallback
+        load_dotenv(override=False)
+except ImportError:
+    # python-dotenv not installed, skip .env loading
+    pass
 
 Account.enable_unaudited_hdwallet_features()
 
@@ -27,14 +45,28 @@ def generate_keypair() -> LocalAccount:
 
 def load_or_create_key(key_path: Optional[Path] = None, save: bool = True) -> LocalAccount:
     """
-    Load key from CLIENT_PRIVATE_KEY (or AGENTPAY_PRIVATE_KEY) env. Never reads or writes a file.
+    Load key from CLIENT_PRIVATE_KEY (or AGENTPAY_PRIVATE_KEY) env or .env file.
+    Never reads or writes a key file (only reads from env/.env).
     Raises RuntimeError if neither env is set.
+    
+    Note: Balance checking (if enabled) happens AFTER wallet creation, so you must set CLIENT_PRIVATE_KEY first.
     """
+    # Try loading .env if not already loaded (in case called before wallet.py import)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)
+    except ImportError:
+        pass
+    
     pk_env = os.getenv(ENV_PRIVATE_KEY) or os.getenv(ENV_PRIVATE_KEY_LEGACY)
     if not pk_env or not pk_env.strip():
+        check_balance_hint = ""
+        if os.getenv("AGENTPAY_CHECK_BALANCE", "false").lower() == "true":
+            check_balance_hint = "\n\n(Note: Balance checking requires CLIENT_PRIVATE_KEY to be set first.)"
         raise RuntimeError(
             "Set CLIENT_PRIVATE_KEY in the environment (never commit it). "
             "Generate one: python -c \"from eth_account import Account; a = Account.create(); print(a.key.hex())\""
+            + check_balance_hint
         )
     pk = pk_env.strip()
     if pk.startswith("0x"):
@@ -74,22 +106,33 @@ class AgentWallet:
                 from agentpay.faucet import ensure_funded, prompt_funding_choice
                 
                 is_funded, message = ensure_funded(self, network=network)
-                if not is_funded:
+                if is_funded:
+                    # Wallet is funded - print success message
+                    print(message)
+                else:
+                    # Needs funding - print message and prompt
                     print(message)
                     # If not auto-funding, prompt human
                     if network == "sepolia" and not os.getenv("AGENTPAY_AUTO_FUND_TESTNET", "false").lower() == "true":
-                        choice = prompt_funding_choice(self, network=network)
-                        if choice == "auto":
-                            # Retry with auto-fund
-                            is_funded, message = ensure_funded(self, auto_fund=True, network=network)
-                            if not is_funded:
-                                print(f"\n⚠️  {message}")
-                        elif choice == "manual":
-                            print(f"\n💡 Please fund {self.address} and retry.")
-                        # else: skip (continue anyway)
+                        try:
+                            choice = prompt_funding_choice(self, network=network)
+                            if choice == "auto":
+                                # Retry with auto-fund
+                                is_funded, message = ensure_funded(self, auto_fund=True, network=network)
+                                if not is_funded:
+                                    print(f"\n⚠️  {message}")
+                            elif choice == "manual":
+                                print(f"\n💡 Please fund {self.address} and retry.")
+                            # else: skip (continue anyway)
+                        except (EOFError, KeyboardInterrupt):
+                            # Non-interactive environment (e.g., bot), skip prompt
+                            print(f"\n💡 Non-interactive: Please fund {self.address} manually or set AGENTPAY_AUTO_FUND_TESTNET=true")
             except ImportError:
                 # Faucet module not available, skip check
                 pass
+            except Exception as e:
+                # Don't crash wallet creation if balance check fails
+                print(f"⚠️  Balance check failed: {e}")
 
     @property
     def address(self) -> str:
