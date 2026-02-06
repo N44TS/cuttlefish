@@ -17,6 +17,7 @@ def setup_command():
     print("╚═══════════════════════════════════════════════════════════════╝\n")
     
     from agentpay import setup_new_agent, AgentWallet, register_and_provision_ens
+    from agentpay.ens2 import get_ens_registration_quote
     
     # Step 1: Get ENS name
     ens_name = input("What ENS name should I use? (e.g., 'myagent' → registers 'myagent.eth'): ").strip()
@@ -28,11 +29,24 @@ def setup_command():
     print(f"\n📦 Generating wallet for {ens_name}.eth...")
     wallet, instructions = setup_new_agent(ens_name)
     
-    # Step 3: Ask user to fund
+    # Step 3: Ask user to fund — show exact amount and address
+    try:
+        total_wei, _ = get_ens_registration_quote(ens_name, duration_years=1.0)
+        eth_amount = f"{total_wei / 10**18:.4f}"
+    except Exception:
+        eth_amount = "0.002"
+    addr = wallet.address
     print("\n" + "="*70)
     print("💰 FUNDING REQUIRED")
     print("="*70)
-    input("Please fund your wallet (see instructions above), then press Enter when done...")
+    print(f"Send exactly this to your agent wallet:")
+    print(f"  • {eth_amount} ETH (Sepolia) — for gas and ENS registration")
+    print(f"  • Get ETH: https://sepoliafaucet.com")
+    print(f"  • Send to this address: {addr}")
+    print(f"\n  • Yellow test tokens (ytest.usd) — for receiving payments")
+    print(f"  • Request: curl -X POST https://clearnet-sandbox.yellow.com/faucet/requestTokens -H 'Content-Type: application/json' -d '{{\"userAddress\":\"{addr}\"}}'")
+    print("="*70)
+    input("After you have sent ETH (and optionally requested ytest.usd), press Enter to continue...")
     
     # Step 4: Get endpoint
     print("\n" + "="*70)
@@ -52,10 +66,9 @@ def setup_command():
     
     # Step 5: Register and provision ENS
     print(f"\n📝 Registering {ens_name}.eth and setting up your agent profile...")
-    print("   (This may take 2-3 minutes for ENS registration to complete)")
-    
     capabilities = input("What can you do? (e.g., 'analyze-data,summarize'): ").strip() or "analyze-data"
     prices = input("Your prices? (e.g., '0.05 USDC per job'): ").strip() or "0.05 USDC per job"
+    print("   (This may take 2-3 minutes for ENS registration to complete)")
     
     ok, result = register_and_provision_ens(
         wallet,
@@ -66,15 +79,27 @@ def setup_command():
     )
     
     if ok:
-        print(f"\n✅ SUCCESS! Your agent is ready:")
+        ens_domain = result.replace(".eth", "")
+        print(f"\n✅ Successfully provisioned '{result}'")
+        print(f"🎉 Complete! '{result}' is registered and provisioned.")
+        print(f"\n   You can check it out here: https://sepolia.app.ens.domains/{ens_domain}.eth")
         print(f"   ENS Name: {result}")
         print(f"   Wallet: {wallet.address}")
         print(f"   Endpoint: {endpoint}")
-        print(f"\n💡 Save your private key:")
+        print(f"\n💡 Save your private key (same terminal or new):")
         print(f"   export CLIENT_PRIVATE_KEY={wallet._account.key.hex()}")
         print(f"   export AGENTPAY_ENS_NAME={result}")
-        print(f"\n🚀 Start your worker:")
+        print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"Step 3 — Start the agent worker")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print(f"   export PORT=8000   # or 8001 for a second agent")
         print(f"   agentpay worker")
+        print(f"\nWhat happens:")
+        print(f"  • Worker server boots")
+        print(f"  • Checks wallet exists and has funds")
+        print(f"  • Checks ENS is registered")
+        print(f"  • Starts listening on the given port")
+        print(f"  • Waits for jobs from other agents")
     else:
         print(f"\n❌ Failed: {result}")
         print(f"\n💡 You can retry with:")
@@ -93,34 +118,53 @@ def worker_command():
     from agentpay.ens2 import get_agent_info, provision_ens_identity, register_and_provision_ens_from_env
     from agentpay.faucet import check_eth_balance, check_yellow_balance
     
-    # Step 1: Check for wallet/key
-    worker_key = os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or os.getenv("AGENTPAY_WORKER_WALLET")
-    if not worker_key:
-        print("❌ No worker wallet found!")
-        choice = input("Generate a new wallet? (y/n): ").strip().lower()
-        if choice == 'y':
-            from agentpay.wallet import generate_keypair
-            account = generate_keypair()
-            private_key_hex = account.key.hex()
-            print(f"\n✅ Generated wallet:")
-            print(f"   Address: {account.address}")
-            print(f"   Private Key: {private_key_hex}")
-            print(f"\n💡 Set this in your environment:")
-            print(f"   export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}")
-            print(f"\n⚠️  Restart the worker after setting the key.")
-            sys.exit(1)
-        else:
-            print("❌ Worker needs AGENTPAY_WORKER_PRIVATE_KEY or AGENTPAY_WORKER_WALLET")
-            sys.exit(1)
+    # Step 1: Check for wallet/key — use worker key if set, else same wallet as setup (CLIENT_PRIVATE_KEY)
+    worker_key = os.getenv("AGENTPAY_WORKER_PRIVATE_KEY")
+    worker_wallet_addr = os.getenv("AGENTPAY_WORKER_WALLET")
+    client_key = os.getenv("CLIENT_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY")
     
-    # Create wallet to check it
+    if not worker_key and not worker_wallet_addr:
+        if client_key:
+            # Same agent: use the wallet from setup so "agentpay worker" works right after setup
+            os.environ["AGENTPAY_WORKER_PRIVATE_KEY"] = client_key.strip()
+            worker_key = client_key
+        else:
+            print("❌ No worker wallet found!")
+            print("   If you just ran 'agentpay setup', set your key first:")
+            print("   export CLIENT_PRIVATE_KEY=0x...   # (from setup output)")
+            print("   Then run: agentpay worker")
+            choice = input("\nGenerate a new wallet? (y/n): ").strip().lower()
+            if choice == 'y':
+                from agentpay.wallet import generate_keypair
+                account = generate_keypair()
+                private_key_hex = account.key.hex()
+                print(f"\n✅ Generated wallet:")
+                print(f"   Address: {account.address}")
+                print(f"   Private Key: {private_key_hex}")
+                print(f"\n💡 Set this in your environment:")
+                print(f"   export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}")
+                print(f"\n⚠️  Restart the worker after setting the key.")
+                sys.exit(1)
+            else:
+                print("❌ Set CLIENT_PRIVATE_KEY (from setup) or AGENTPAY_WORKER_PRIVATE_KEY")
+                sys.exit(1)
+    
+    # Create wallet to check it: prefer AgentWallet (CLIENT_PRIVATE_KEY), else worker key
     try:
-        wallet = AgentWallet()
-        if hasattr(wallet, '_account') and wallet._account:
+        if client_key or os.getenv("AGENTPAY_PRIVATE_KEY"):
+            wallet = AgentWallet()
             worker_address = wallet.address
         else:
-            # Fallback: try to get from env
-            worker_address = os.getenv("AGENTPAY_WORKER_WALLET", "unknown")
+            from eth_account import Account
+            pk = (os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or "").strip()
+            if not pk.startswith("0x"):
+                pk = "0x" + pk
+            account = Account.from_key(pk)
+            worker_address = account.address
+            # Minimal wallet-like object for balance checks
+            class _WorkerWallet:
+                address = account.address
+            wallet = _WorkerWallet()
     except Exception as e:
         print(f"❌ Failed to load wallet: {e}")
         sys.exit(1)
@@ -129,15 +173,15 @@ def worker_command():
     
     # Step 2: Check funding
     print("\n💰 Checking wallet balance...")
-    eth_ok, eth_msg = check_eth_balance(wallet, network="sepolia")
-    yellow_ok, yellow_msg = check_yellow_balance(wallet, network="sepolia")
+    eth_balance, eth_ok = check_eth_balance(wallet)
+    yellow_balance, yellow_ok = check_yellow_balance(wallet)
     
     if not eth_ok or not yellow_ok:
         print("⚠️  Wallet needs funding:")
         if not eth_ok:
-            print(f"   {eth_msg}")
+            print(f"   ETH: send Sepolia ETH to {worker_address} (get from https://sepoliafaucet.com)")
         if not yellow_ok:
-            print(f"   {yellow_msg}")
+            print(f"   ytest.usd: request from Yellow faucet for {worker_address}")
         input("\nPress Enter after funding, or Ctrl+C to exit...")
     
     # Step 3: Check ENS registration
