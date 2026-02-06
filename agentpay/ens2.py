@@ -881,7 +881,7 @@ Next steps:
    
    export AGENTPAY_WORKER_WALLET={address}
    export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}
-   export AGENTPAY_PAYMENT_METHOD=yellow_full
+   export AGENTPAY_PAYMENT_METHOD=yellow_chunked_full
    python3 agentpay/examples/worker_server.py
    
    Your worker is now running and ready to receive jobs!
@@ -891,12 +891,15 @@ Next steps:
    
    export CLIENT_PRIVATE_KEY=<different_key_hex>
    export WORKER_ENS_NAME={label}.eth
-   python3 agentpay/examples/yellow_e2e.py
+   python3 agentpay/examples/test_all_features.py
    
-   This will:
+   This will test all prize features:
    - Find your agent by ENS name
-   - Send a job
-   - Pay via Yellow (client pays worker; both addresses must differ)
+   - Lock (both bots create channels)
+   - Handshake (create Nitrolite session)
+   - Chunked micropayments (10 chunks)
+   - Settlement (on-chain transaction)
+   - Adjudicator (dispute resolution demo)
    - Get the result back
    
    Note: ENS registration takes about 2.5 minutes to complete; wait before using a newly registered name.
