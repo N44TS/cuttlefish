@@ -32,4 +32,7 @@ agentpay-worker = "agentpay.cli:worker_command"
 # Flat layout: package code lives in this directory (agentpay/), not in agentpay/agentpay/
 [tool.setuptools]
 packages = ["agentpay", "agentpay.payments"]
-package-dir = {"agentpay": ".", "agentpay.payments": "payments"}
+# Quoted keys required: dots in key names would be parsed as nested tables
+[tool.setuptools.package-dir]
+agentpay = "."
+"agentpay.payments" = "payments"
