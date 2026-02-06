@@ -24,6 +24,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
 
+[project.scripts]
+agentpay = "agentpay.cli:main"
+agentpay-setup = "agentpay.cli:setup_command"
+agentpay-worker = "agentpay.cli:worker_command"
+
 # Flat layout: package code lives in this directory (agentpay/), not in agentpay/agentpay/
 [tool.setuptools]
 packages = ["agentpay", "agentpay.payments"]

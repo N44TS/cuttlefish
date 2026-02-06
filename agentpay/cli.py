@@ -1,0 +1,240 @@
+"""
+AgentPay CLI — Interactive commands for setting up and running agents.
+
+Commands:
+  agentpay setup    — Interactive setup: generate wallet, register ENS, provision endpoint
+  agentpay worker   — Start worker server with interactive setup checks
+"""
+import os
+import sys
+from pathlib import Path
+from typing import Optional
+
+def setup_command():
+    """Interactive setup: generate wallet, register ENS, provision endpoint."""
+    print("╔═══════════════════════════════════════════════════════════════╗")
+    print("║  AgentPay Setup — Let's get your agent ready!                ║")
+    print("╚═══════════════════════════════════════════════════════════════╝\n")
+    
+    from agentpay import setup_new_agent, AgentWallet, register_and_provision_ens
+    
+    # Step 1: Get ENS name
+    ens_name = input("What ENS name should I use? (e.g., 'myagent' → registers 'myagent.eth'): ").strip()
+    if not ens_name:
+        ens_name = "myagent"
+    ens_name = ens_name.lower().removesuffix(".eth")
+    
+    # Step 2: Generate wallet
+    print(f"\n📦 Generating wallet for {ens_name}.eth...")
+    wallet, instructions = setup_new_agent(ens_name)
+    
+    # Step 3: Ask user to fund
+    print("\n" + "="*70)
+    print("💰 FUNDING REQUIRED")
+    print("="*70)
+    input("Please fund your wallet (see instructions above), then press Enter when done...")
+    
+    # Step 4: Get endpoint
+    print("\n" + "="*70)
+    print("🌐 ENDPOINT CONFIGURATION")
+    print("="*70)
+    print("Where should other agents send jobs to you?")
+    print("  Examples:")
+    print("    - Codespace: https://your-codespace-8000.preview.app.github.dev")
+    print("    - Local dev: http://localhost:8000")
+    print("    - Your server: https://your-domain.com")
+    endpoint = input("\nYour public endpoint URL: ").strip()
+    
+    if not endpoint:
+        print("⚠️  No endpoint provided. You can set it later with:")
+        print(f"   python -c \"from agentpay import AgentWallet, provision_ens_identity; w=AgentWallet(); provision_ens_identity(w, '{ens_name}', endpoint='YOUR_URL')\"")
+        return
+    
+    # Step 5: Register and provision ENS
+    print(f"\n📝 Registering {ens_name}.eth and setting up your agent profile...")
+    print("   (This may take 2-3 minutes for ENS registration to complete)")
+    
+    capabilities = input("What can you do? (e.g., 'analyze-data,summarize'): ").strip() or "analyze-data"
+    prices = input("Your prices? (e.g., '0.05 USDC per job'): ").strip() or "0.05 USDC per job"
+    
+    ok, result = register_and_provision_ens(
+        wallet,
+        ens_name,
+        capabilities=capabilities,
+        endpoint=endpoint,
+        prices=prices,
+    )
+    
+    if ok:
+        print(f"\n✅ SUCCESS! Your agent is ready:")
+        print(f"   ENS Name: {result}")
+        print(f"   Wallet: {wallet.address}")
+        print(f"   Endpoint: {endpoint}")
+        print(f"\n💡 Save your private key:")
+        print(f"   export CLIENT_PRIVATE_KEY={wallet._account.key.hex()}")
+        print(f"   export AGENTPAY_ENS_NAME={result}")
+        print(f"\n🚀 Start your worker:")
+        print(f"   agentpay worker")
+    else:
+        print(f"\n❌ Failed: {result}")
+        print(f"\n💡 You can retry with:")
+        print(f"   export CLIENT_PRIVATE_KEY={wallet._account.key.hex()}")
+        print(f"   python -c \"from agentpay import AgentWallet, register_and_provision_ens; w=AgentWallet(); register_and_provision_ens(w, '{ens_name}', endpoint='{endpoint}')\"")
+
+
+def worker_command():
+    """Start worker server with interactive setup checks."""
+    print("╔═══════════════════════════════════════════════════════════════╗")
+    print("║  AgentPay Worker — Starting with setup checks...             ║")
+    print("╚═══════════════════════════════════════════════════════════════╝\n")
+    
+    # Import here to avoid circular deps
+    from agentpay import AgentWallet
+    from agentpay.ens2 import get_agent_info, provision_ens_identity, register_and_provision_ens_from_env
+    from agentpay.faucet import check_eth_balance, check_yellow_balance
+    
+    # Step 1: Check for wallet/key
+    worker_key = os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or os.getenv("AGENTPAY_WORKER_WALLET")
+    if not worker_key:
+        print("❌ No worker wallet found!")
+        choice = input("Generate a new wallet? (y/n): ").strip().lower()
+        if choice == 'y':
+            from agentpay.wallet import generate_keypair
+            account = generate_keypair()
+            private_key_hex = account.key.hex()
+            print(f"\n✅ Generated wallet:")
+            print(f"   Address: {account.address}")
+            print(f"   Private Key: {private_key_hex}")
+            print(f"\n💡 Set this in your environment:")
+            print(f"   export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}")
+            print(f"\n⚠️  Restart the worker after setting the key.")
+            sys.exit(1)
+        else:
+            print("❌ Worker needs AGENTPAY_WORKER_PRIVATE_KEY or AGENTPAY_WORKER_WALLET")
+            sys.exit(1)
+    
+    # Create wallet to check it
+    try:
+        wallet = AgentWallet()
+        if hasattr(wallet, '_account') and wallet._account:
+            worker_address = wallet.address
+        else:
+            # Fallback: try to get from env
+            worker_address = os.getenv("AGENTPAY_WORKER_WALLET", "unknown")
+    except Exception as e:
+        print(f"❌ Failed to load wallet: {e}")
+        sys.exit(1)
+    
+    print(f"✅ Wallet loaded: {worker_address}")
+    
+    # Step 2: Check funding
+    print("\n💰 Checking wallet balance...")
+    eth_ok, eth_msg = check_eth_balance(wallet, network="sepolia")
+    yellow_ok, yellow_msg = check_yellow_balance(wallet, network="sepolia")
+    
+    if not eth_ok or not yellow_ok:
+        print("⚠️  Wallet needs funding:")
+        if not eth_ok:
+            print(f"   {eth_msg}")
+        if not yellow_ok:
+            print(f"   {yellow_msg}")
+        input("\nPress Enter after funding, or Ctrl+C to exit...")
+    
+    # Step 3: Check ENS registration
+    ens_name = os.getenv("AGENTPAY_ENS_NAME", "").strip().removesuffix(".eth")
+    if not ens_name:
+        ens_name = input("\nWhat's your ENS name? (e.g., 'myagent'): ").strip().removesuffix(".eth")
+        if ens_name:
+            os.environ["AGENTPAY_ENS_NAME"] = ens_name
+    
+    if ens_name:
+        print(f"\n📝 Checking ENS setup for {ens_name}.eth...")
+        try:
+            info = get_agent_info(f"{ens_name}.eth", network="sepolia")
+            endpoint = info.get("endpoint") if info else None
+            
+            if not endpoint:
+                print(f"⚠️  {ens_name}.eth exists but has no endpoint set!")
+                endpoint = input("What's your public endpoint URL? (e.g., https://your-codespace-8000.preview.app.github.dev): ").strip()
+                if endpoint:
+                    print(f"📝 Setting endpoint in ENS...")
+                    ok, msg = provision_ens_identity(
+                        wallet,
+                        f"{ens_name}.eth",
+                        endpoint=endpoint,
+                    )
+                    if ok:
+                        print(f"✅ Endpoint set: {endpoint}")
+                    else:
+                        print(f"❌ Failed to set endpoint: {msg}")
+            else:
+                print(f"✅ ENS configured: endpoint = {endpoint}")
+        except Exception as e:
+            print(f"⚠️  ENS check failed: {e}")
+            print("   Continuing anyway...")
+    else:
+        print("⚠️  No ENS name configured. Other agents won't be able to find you via ENS.")
+        print("   Set AGENTPAY_ENS_NAME or run 'agentpay setup' first.")
+    
+    # Step 4: Start worker server
+    print("\n" + "="*70)
+    print("🚀 Starting worker server...")
+    print("="*70)
+    print(f"   Wallet: {worker_address}")
+    if ens_name:
+        print(f"   ENS: {ens_name}.eth")
+    print(f"   Payment method: {os.getenv('AGENTPAY_PAYMENT_METHOD', 'yellow_chunked_full')}")
+    print(f"   Port: {os.getenv('PORT', os.getenv('AGENTPAY_PORT', '8000'))}")
+    print("\n✅ Worker is ready! Waiting for jobs...\n")
+    
+    # Import and run worker server
+    # Ensure repo root is in path (worker_server.py needs this)
+    _root = Path(__file__).resolve().parent.parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    
+    # Import worker server app
+    # worker_server.py adds repo root to path, so import it directly
+    examples_path = Path(__file__).resolve().parent.parent / "examples"
+    worker_server_file = examples_path / "worker_server.py"
+    
+    # Read and exec the worker_server.py to get the app
+    # This ensures the path setup in worker_server.py runs
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("worker_server", worker_server_file)
+    worker_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker_module)
+    app = worker_module.app
+    
+    import uvicorn
+    
+    port = int(os.getenv("PORT", os.getenv("AGENTPAY_PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+def main():
+    """CLI entry point."""
+    if len(sys.argv) < 2:
+        print("AgentPay CLI")
+        print("\nCommands:")
+        print("  agentpay setup    — Interactive setup: generate wallet, register ENS")
+        print("  agentpay worker   — Start worker server with setup checks")
+        print("\nExamples:")
+        print("  agentpay setup")
+        print("  agentpay worker")
+        sys.exit(1)
+    
+    command = sys.argv[1]
+    
+    if command == "setup":
+        setup_command()
+    elif command == "worker":
+        worker_command()
+    else:
+        print(f"Unknown command: {command}")
+        print("Use 'agentpay setup' or 'agentpay worker'")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
