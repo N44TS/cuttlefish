@@ -224,6 +224,7 @@ def register_ens_name(
     Returns (True, "label.eth") or (False, error_message).
     """
     print(f"\n📝 Starting ENS registration for '{label}.eth'...")
+    print("   (Full registration typically takes about 2.5 minutes.)")
     
     label = label.strip().lower().removesuffix(".eth")
     if not label or len(label) < 3:
@@ -277,15 +278,15 @@ def register_ens_name(
     print("\n📤 Step 1/2: Committing registration...")
     commit_tx = controller.functions.commit(commitment).build_transaction({
         "from": owner_address,
-        "nonce": w3.eth.get_transaction_count(owner_address),
+        "nonce": w3.eth.get_transaction_count(owner_address, "pending"),
         "gas": 100000,
         "gasPrice": w3.eth.gas_price,
     })
     # Use w3.eth.account.sign_transaction like working version
     pk = wallet.account.key.hex()
     signed_commit = w3.eth.account.sign_transaction(commit_tx, pk)
-    commit_tx_hash = w3.eth.send_raw_transaction(signed_commit.raw_transaction)
-    commit_receipt = w3.eth.wait_for_transaction_receipt(commit_tx_hash)
+    commit_tx_hash = w3.eth.send_raw_transaction(signed_commit.rawTransaction)
+    commit_receipt = w3.eth.wait_for_transaction_receipt(commit_tx_hash, timeout=300)
     if commit_receipt.get("status") != 1:
         return False, "Commit transaction failed."
 
@@ -312,14 +313,14 @@ def register_ens_name(
     ).build_transaction({
         "from": owner_address,
         "value": total_price_with_buffer,
-        "nonce": w3.eth.get_transaction_count(owner_address),
+        "nonce": w3.eth.get_transaction_count(owner_address, "pending"),
         "gas": 300000,
         "gasPrice": w3.eth.gas_price,
     })
     # Use w3.eth.account.sign_transaction like working version
     signed_register = w3.eth.account.sign_transaction(register_tx, pk)
-    register_tx_hash = w3.eth.send_raw_transaction(signed_register.raw_transaction)
-    register_receipt = w3.eth.wait_for_transaction_receipt(register_tx_hash)
+    register_tx_hash = w3.eth.send_raw_transaction(signed_register.rawTransaction)
+    register_receipt = w3.eth.wait_for_transaction_receipt(register_tx_hash, timeout=300)
     if register_receipt.get("status") != 1:
         return False, "Register transaction failed."
 
@@ -392,11 +393,11 @@ def provision_ens_identity(
                     "from": wallet.address,
                     "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                     "gas": 100000,
-                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                    "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
                 })
                 print("🔓 Reclaiming ownership from Base Registrar...")
                 signed = wallet.account.sign_transaction(reclaim_tx)
-                tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+                tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
                 _wait_receipt(w3, tx_hash, description="Reclaim ownership")
             else:
                 return False, f"Wallet does not own '{ens_name}' (registry owner: {owner})."
@@ -411,7 +412,7 @@ def provision_ens_identity(
                     "from": wallet.address,
                     "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                     "gas": 100000,
-                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                    "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
                 })
             else:
                 # Use Name Wrapper (name is wrapped)
@@ -420,12 +421,12 @@ def provision_ens_identity(
                     "from": wallet.address,
                     "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                     "gas": 100000,
-                    "nonce": w3.eth.get_transaction_count(wallet.address),
+                    "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
                 })
             
             # Use wallet.account.sign_transaction (matches working ens.py)
             signed = wallet.account.sign_transaction(tx)
-            set_resolver_tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            set_resolver_tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
             _wait_receipt(w3, set_resolver_tx_hash, timeout=300, description="Set resolver")
             
             # Verify resolver was set
@@ -462,11 +463,11 @@ def provision_ens_identity(
                 "from": wallet.address,
                 "chainId": w3.eth.chain_id,  # CRITICAL: Include chainId (EIP-155)
                 "gas": 80000,
-                "nonce": w3.eth.get_transaction_count(wallet.address),
+                "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
             })
             # Use wallet.account.sign_transaction (matches working ens.py)
             signed = wallet.account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
             _wait_receipt(w3, tx_hash, timeout=300, description=f"Set {key}")
     except RuntimeError as e:
         return False, str(e)
@@ -494,8 +495,8 @@ MAINNET_RPCS = [
 ]
 
 
-def _connect_multiple(rpc_urls: List[str], timeout: int = 15) -> Web3:
-    """Connect to first available RPC from list. Uses timeout so ENS lookup cannot hang."""
+def _connect_multiple(rpc_urls: List[str], timeout: int = 30) -> Web3:
+    """Connect to first available RPC from list. 30s timeout allows slow RPCs for ENS lookup."""
     for url in rpc_urls:
         try:
             w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": timeout}))
@@ -806,9 +807,14 @@ Next steps:
              -d '{{"userAddress":"{address}"}}'
       - Or if you have yellow_test set up: cd yellow_test && PRIVATE_KEY={private_key_hex} npm run faucet
       - This gives you test money (ytest.usd) to pay workers
+   
+   c) Check your ytest.usd balance (after faucet). Set CLIENT_PRIVATE_KEY first, then run:
+      export CLIENT_PRIVATE_KEY={private_key_hex}
+      python3 -c "from agentpay import AgentWallet; from agentpay.payments.yellow import steps_1_to_3; w=AgentWallet(); b=[x for x in steps_1_to_3(w) if x.get('asset')=='ytest.usd']; print('ytest.usd:', b[0]['amount']+' units (1e6=1 USD)' if b else 'none - request from faucet above')"
 
 3. REGISTER YOUR AGENT NAME AND ENDPOINT
-   After your wallet has ETH, register your agent's name and where to send jobs:
+   After your wallet has ETH, register your agent's name and where to send jobs.
+   Note: Full ENS registration (commit + register + provisioning) takes about 2.5 minutes; wait for it to complete.
    
    python3 -c "
    from agentpay import AgentWallet, register_and_provision_ens
@@ -829,7 +835,8 @@ Next steps:
    - Other agents can now find and hire you by name
 
 4. START YOUR WORKER
-   Once registered, start your worker server (in a separate terminal):
+   Once registered, start your worker server (in a separate terminal).
+   Important: The worker address must be DIFFERENT from the client address. Use this same wallet as worker when testing alone; when another agent pays you, they use their own CLIENT_PRIVATE_KEY and your worker address.
    
    export AGENTPAY_WORKER_WALLET={address}
    export AGENTPAY_WORKER_PRIVATE_KEY={private_key_hex}
@@ -839,17 +846,19 @@ Next steps:
    Your worker is now running and ready to receive jobs!
 
 5. TEST IT WORKS
-   In another terminal, hire your own agent to test:
+   In another terminal, use a DIFFERENT wallet as client (different from the worker above). Payment fails if client and worker are the same address. Set CLIENT_PRIVATE_KEY to a different key, then:
    
-   export CLIENT_PRIVATE_KEY={private_key_hex}
+   export CLIENT_PRIVATE_KEY=<different_key_hex>
    export WORKER_ENS_NAME={label}.eth
    python3 agentpay/examples/yellow_e2e.py
    
    This will:
    - Find your agent by ENS name
    - Send a job
-   - Pay via Yellow
+   - Pay via Yellow (client pays worker; both addresses must differ)
    - Get the result back
+   
+   Note: ENS registration takes about 2.5 minutes to complete; wait before using a newly registered name.
 
 ╚═══════════════════════════════════════════════════════════════╝
 """

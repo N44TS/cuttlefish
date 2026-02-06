@@ -161,6 +161,90 @@ def test_submit_state(app_session_id: str = None):
         return False
 
 
+def test_two_party_escrow():
+    """Test two-party escrow: create_session (quorum 2) → submit_state (client) → sign_state_worker (worker)."""
+    print("\n" + "=" * 60)
+    print("Test: Two-party escrow (quorum 2)")
+    print("=" * 60)
+
+    client_key = os.getenv("PRIVATE_KEY")
+    worker_key = os.getenv("WORKER_PRIVATE_KEY")
+    worker_address = os.getenv("WORKER_ADDRESS")
+    client_address = os.getenv("CLIENT_ADDRESS")  # Address for PRIVATE_KEY (client)
+
+    if not all([client_key, worker_key, worker_address, client_address]):
+        print("\n⚠️  Skipping two_party_escrow test:")
+        print("   Set PRIVATE_KEY, WORKER_PRIVATE_KEY, WORKER_ADDRESS, CLIENT_ADDRESS in .env")
+        print("   (CLIENT_ADDRESS = address of the wallet that holds PRIVATE_KEY)")
+        return None
+
+    amount = "1000000"  # 1 ytest.usd
+
+    # 1) Create session (quorum 2)
+    print("\n[1/3] create_session (quorum: 2)...")
+    create_req = {
+        "command": "create_session",
+        "client_private_key": client_key,
+        "worker_address": worker_address,
+        "quorum": 2,
+    }
+    try:
+        create_resp = call_bridge(create_req, timeout=35)
+    except Exception as e:
+        print(f"❌ create_session failed: {e}")
+        return False
+    if not create_resp.get("success"):
+        print(f"❌ create_session failed: {create_resp.get('error')}")
+        return False
+    session_id = create_resp.get("data", {}).get("app_session_id")
+    version = create_resp.get("data", {}).get("version", 1)
+    print(f"   Session: {session_id[:20]}... version={version}")
+
+    # 2) Client submits state
+    print("\n[2/3] submit_state (client signs)...")
+    submit_req = {
+        "command": "submit_state",
+        "app_session_id": session_id,
+        "client_private_key": client_key,
+        "worker_address": worker_address,
+        "amount": amount,
+    }
+    try:
+        submit_resp = call_bridge(submit_req, timeout=30)
+    except Exception as e:
+        print(f"❌ submit_state failed: {e}")
+        return False
+    if not submit_resp.get("success"):
+        print(f"❌ submit_state failed: {submit_resp.get('error')}")
+        return False
+    next_version = submit_resp.get("data", {}).get("version")
+    print(f"   Client signed. Version for worker: {next_version}")
+
+    # 3) Worker signs same state
+    print("\n[3/3] sign_state_worker (worker signs)...")
+    worker_req = {
+        "command": "sign_state_worker",
+        "app_session_id": session_id,
+        "worker_private_key": worker_key,
+        "client_address": client_address,
+        "worker_address": worker_address,
+        "amount": amount,
+        "version": next_version,
+    }
+    try:
+        worker_resp = call_bridge(worker_req, timeout=30)
+    except Exception as e:
+        print(f"❌ sign_state_worker failed: {e}")
+        return False
+    if not worker_resp.get("success"):
+        print(f"❌ sign_state_worker failed: {worker_resp.get('error')}")
+        return False
+    print(f"   Worker signed. State proof: {worker_resp.get('data', {}).get('state_proof', 'N/A')}")
+
+    print("\n✅ Two-party escrow PASSED (client + worker both signed).")
+    return True
+
+
 if __name__ == "__main__":
     # Load .env file
     load_env()
@@ -207,6 +291,9 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"\n❌ Error: {e}")
             sys.exit(1)
+    elif test_name == "two_party" or test_name == "two_party_escrow":
+        success = test_two_party_escrow()
+        sys.exit(0 if success else 1)
     elif test_name == "all":
         # Run all tests in sequence
         print("=" * 70)
@@ -270,5 +357,5 @@ if __name__ == "__main__":
         print("⚠️  submit_state: Known issue (timeout)")
     else:
         print(f"Unknown test: {test_name}")
-        print("Usage: python3 test_bridge.py [test|create_session|submit_state|close_session|all] [session_id]")
+        print("Usage: python3 test_bridge.py [test|create_session|submit_state|close_session|two_party|all] [session_id]")
         sys.exit(1)

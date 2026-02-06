@@ -204,30 +204,28 @@ def pay_yellow_full(bill: Bill, wallet: AgentWallet) -> str:
 
 def pay_yellow_channel(bill: Bill, wallet: AgentWallet) -> str:
     """
-    Pay via Yellow channel path (steps 4a, 4c, 4d): create channel if needed,
-    transfer to worker, close channel. Returns close_tx_hash (on-chain, visible on Sepolia Etherscan).
+    Pay via Yellow channel path as three separate steps (4a → 4c → 4d):
+    open channel (if needed), transfer to worker, close channel.
+    Returns close_tx_hash (on-chain, visible on Sepolia Etherscan).
+    Each step has its own timeout so slow RPCs don't fail the whole flow.
     Client needs ytest.usd in unified balance (faucet) and a little Sepolia ETH for gas.
     """
     if not hasattr(wallet, "account"):
         raise ValueError("Wallet must have an account for Yellow channel payments")
-    private_key = wallet.account.key.hex()
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
-    amount_units = _to_units(bill.amount)
-    cmd = {
-        "command": "pay_via_channel",
-        "client_private_key": private_key,
-        "worker_address": bill.recipient,
-        "amount": amount_units,
-    }
-    # Bridge runs ensureChannel (~45–90s) + transferAndClose (~120s); need >210s total
-    response = _call_bridge(cmd, timeout=240)
-    if not response.get("success"):
-        raise RuntimeError(f"pay_via_channel failed: {response.get('error')}")
-    data = response.get("data") or {}
-    tx_hash = data.get("close_tx_hash")
+    try:
+        print("[CLIENT] Opening channel (step 4a)...", flush=True)
+        create_channel(wallet, timeout=90)
+        print("[CLIENT] Transferring to worker (step 4c)...", flush=True)
+        channel_transfer(wallet, bill.recipient, amount=bill.amount, timeout=60)
+        print("[CLIENT] Closing channel (step 4d)...", flush=True)
+        tx_hash = close_channel(wallet, timeout=90)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"{e}. "
+            "Check you have enough ytest.usd (Yellow faucet) and a little Sepolia ETH for gas."
+        )
     if not tx_hash:
-        raise RuntimeError("Bridge returned success but no close_tx_hash")
+        raise RuntimeError("Close channel returned no tx hash (no open channel?)")
     return tx_hash
 
 

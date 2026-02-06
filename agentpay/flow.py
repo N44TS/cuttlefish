@@ -7,6 +7,10 @@ Optionally the requester creates an EAS review (attestation) after success.
 
 ENS integration: request_job_by_ens (resolve worker by ENS name) and
 hire_agent (discover by capability or by ENS name, then run 402 flow).
+
+Note: ENS (ens2.py) and Yellow (payments/yellow.py + bridge subprocess) are
+separate code paths. Do not share code or timeouts between them; changes to
+one must not break the other. Both may use the same env (e.g. SEPOLIA_RPC).
 """
 
 import os
