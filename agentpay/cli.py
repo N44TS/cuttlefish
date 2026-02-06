@@ -80,26 +80,48 @@ def setup_command():
     
     if ok:
         ens_domain = result.replace(".eth", "")
+        pk_hex = wallet._account.key.hex()
+        # Save to .env so they don't have to copy-paste; same wallet works for both roles
+        env_path = Path.cwd() / ".env"
+        env_lines = [
+            "# AgentPay — written by agentpay setup (do not commit; contains private key)",
+            f"CLIENT_PRIVATE_KEY={pk_hex}",
+            f"AGENTPAY_WORKER_PRIVATE_KEY={pk_hex}",
+            f"AGENTPAY_ENS_NAME={result}",
+            "",
+        ]
+        try:
+            with open(env_path, "w") as f:
+                f.write("\n".join(env_lines))
+            saved_env = True
+        except Exception:
+            saved_env = False
         print(f"\n✅ Successfully provisioned '{result}'")
         print(f"🎉 Complete! '{result}' is registered and provisioned.")
         print(f"\n   You can check it out here: https://sepolia.app.ens.domains/{ens_domain}.eth")
         print(f"   ENS Name: {result}")
         print(f"   Wallet: {wallet.address}")
         print(f"   Endpoint: {endpoint}")
-        print(f"\n💡 Save your private key (same terminal or new):")
-        print(f"   export CLIENT_PRIVATE_KEY={wallet._account.key.hex()}")
-        print(f"   export AGENTPAY_ENS_NAME={result}")
+        if saved_env:
+            print(f"\n   💾 Saved credentials to .env in this directory (key + ENS name). Do not commit .env.")
         print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print(f"Step 3 — Start the agent worker")
+        print(f"YOU CAN DO BOTH — receive work and give work (same wallet)")
         print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        print(f"   export PORT=8000   # or 8001 for a second agent")
-        print(f"   agentpay worker")
-        print(f"\nWhat happens:")
-        print(f"  • Worker server boots")
-        print(f"  • Checks wallet exists and has funds")
-        print(f"  • Checks ENS is registered")
-        print(f"  • Starts listening on the given port")
-        print(f"  • Waits for jobs from other agents")
+        if saved_env:
+            print(f"\n► To start receiving work (get hired): run this from the same directory:")
+            print(f"  agentpay worker")
+            print(f"\n► To give work (hire another agent): run this, replacing otherbot.eth with their ENS name:")
+            print(f"  WORKER_ENS_NAME=otherbot.eth python agentpay/examples/moltbot_demo.py")
+        else:
+            print(f"\n► To receive work:")
+            print(f"  export CLIENT_PRIVATE_KEY={pk_hex}")
+            print(f"  export AGENTPAY_ENS_NAME={result}")
+            print(f"  agentpay worker")
+            print(f"\n► To give work (hire another agent):")
+            print(f"  export CLIENT_PRIVATE_KEY={pk_hex}")
+            print(f"  WORKER_ENS_NAME=otherbot.eth python agentpay/examples/moltbot_demo.py")
+        if saved_env:
+            print(f"\n  Run from this directory so .env is loaded; no need to copy the key.")
     else:
         print(f"\n❌ Failed: {result}")
         print(f"\n💡 You can retry with:")

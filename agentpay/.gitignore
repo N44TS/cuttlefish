@@ -3,6 +3,7 @@
 agent_key.json
 **/agent_key.json
 .agentpay/
+.env
 
 # Python
 __pycache__/
