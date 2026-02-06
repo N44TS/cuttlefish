@@ -46,12 +46,50 @@ class AgentWallet:
     """
     Wallet for an AI agent. Key is loaded from CLIENT_PRIVATE_KEY (env); AGENTPAY_PRIVATE_KEY accepted as fallback.
     Never reads or writes a key file.
+    
+    Optionally checks balance and prompts for funding:
+    - Set AGENTPAY_CHECK_BALANCE=true to enable balance checking
+    - Set AGENTPAY_AUTO_FUND_TESTNET=true to auto-fund on testnet (default: false, prompts human)
+    - On mainnet: Always prompts human (never auto-funds)
     """
 
-    def __init__(self, account: Optional[LocalAccount] = None, key_path: Optional[Path] = None):
+    def __init__(
+        self,
+        account: Optional[LocalAccount] = None,
+        key_path: Optional[Path] = None,
+        check_balance: Optional[bool] = None,
+        network: str = "sepolia",
+    ):
         if account is None:
             account = load_or_create_key(key_path=key_path)
         self._account = account
+        
+        # Optional: Check balance and prompt for funding
+        if check_balance is None:
+            check_balance = os.getenv("AGENTPAY_CHECK_BALANCE", "false").lower() == "true"
+        
+        if check_balance:
+            # Lazy import to avoid circular dependency
+            try:
+                from agentpay.faucet import ensure_funded, prompt_funding_choice
+                
+                is_funded, message = ensure_funded(self, network=network)
+                if not is_funded:
+                    print(message)
+                    # If not auto-funding, prompt human
+                    if network == "sepolia" and not os.getenv("AGENTPAY_AUTO_FUND_TESTNET", "false").lower() == "true":
+                        choice = prompt_funding_choice(self, network=network)
+                        if choice == "auto":
+                            # Retry with auto-fund
+                            is_funded, message = ensure_funded(self, auto_fund=True, network=network)
+                            if not is_funded:
+                                print(f"\n⚠️  {message}")
+                        elif choice == "manual":
+                            print(f"\n💡 Please fund {self.address} and retry.")
+                        # else: skip (continue anyway)
+            except ImportError:
+                # Faucet module not available, skip check
+                pass
 
     @property
     def address(self) -> str:

@@ -93,9 +93,9 @@ def request_job(
         payment_method = bill.payment_method or "yellow_channel"
         pay_fn = get_pay_fn(payment_method)
 
-    # 4) Pay
+    # 4) Pay (worker_endpoint passed for chunked flow so client can POST to /sign-state)
     try:
-        proof = pay_fn(bill, wallet)
+        proof = pay_fn(bill, wallet, worker_endpoint=worker_endpoint)
         if proof and proof.startswith("0x"):
             print("[CLIENT] Paid. Tx:", proof[:18] + "...")
     except Exception as e:
@@ -135,6 +135,15 @@ def request_job(
                 result.yellow_session_id = parts[2].strip() if len(parts) > 2 else None
         elif p.startswith("0x") and len(p) == 66:
             result.payment_tx_hash = p
+        elif p.startswith("yellow_chunked_full|"):
+            parts = p.split("|")
+            if len(parts) >= 4:
+                result.yellow_session_id = parts[1].strip()
+                result.payment_tx_hash = parts[3].strip()
+        elif p.startswith("yellow_chunked|"):
+            parts = p.split("|")
+            if len(parts) >= 2:
+                result.yellow_session_id = parts[1].strip()
         elif p.startswith("yellow|") or p.startswith("session:"):
             if p.startswith("yellow|"):
                 parts = p.split("|")
@@ -144,6 +153,18 @@ def request_job(
                 parts = p.split(":")
                 if len(parts) >= 2:
                     result.yellow_session_id = parts[1].strip()
+
+    # 5c) Settlement: optionally close Yellow session so protocol can finalize (session path only, not chunked_full which already settled via channel).
+    if result.status == "completed" and proof:
+        p = proof.strip()
+        if (p.startswith("yellow|") or p.startswith("yellow_chunked|")) and "yellow_full|" not in p and "yellow_chunked_full|" not in p:
+            try:
+                parts = p.split("|")
+                if len(parts) >= 2:
+                    from agentpay.payments.yellow import close_yellow_session
+                    close_yellow_session(parts[1], wallet, bill.recipient)
+            except Exception:
+                pass  # Don't fail the job if session close fails (e.g. quorum-2 sandbox limitation).
 
     # 6) Optional: requester creates EAS review (recipient = worker; requester pays gas)
     if create_review and result.status == "completed" and result.worker:

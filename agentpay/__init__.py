@@ -28,6 +28,7 @@ from agentpay.ens2 import (
     register_and_provision_ens_from_env,
     setup_new_agent,
 )
+from agentpay.faucet import ensure_funded, check_eth_balance, check_yellow_balance, prompt_funding_choice
 
 __all__ = [
     "__version__",
@@ -48,4 +49,8 @@ __all__ = [
     "register_and_provision_ens",
     "register_and_provision_ens_from_env",
     "setup_new_agent",
+    "ensure_funded",
+    "check_eth_balance",
+    "check_yellow_balance",
+    "prompt_funding_choice",
 ]
