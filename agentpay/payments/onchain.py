@@ -50,6 +50,8 @@ def pay_onchain(
     wallet: AgentWallet,
     rpc_url: Optional[str] = None,
     usdc_address: Optional[str] = None,
+    worker_endpoint: Optional[str] = None,
+    **kwargs: object,
 ) -> str:
     """
     Pay a bill with on-chain USDC. Returns tx_hash for the worker to verify.

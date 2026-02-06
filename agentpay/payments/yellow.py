@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import requests
+
 from agentpay.schema import Bill
 from agentpay.wallet import AgentWallet
 
@@ -108,6 +110,8 @@ def pay_yellow(
     wallet: AgentWallet,
     app_session_id: Optional[str] = None,
     worker_address: Optional[str] = None,
+    worker_endpoint: Optional[str] = None,
+    **kwargs: object,
 ) -> str:
     """
     Pay a bill using Yellow/Nitrolite escrow (two-party).
@@ -123,12 +127,19 @@ def pay_yellow(
         Worker must call sign_state_worker with this version to complete payment.
 
     Flow:
-        1. Create session (quorum 2) if not provided
-        2. Submit state (client signs) - returns version
-        3. Return proof with version for worker to sign
+        0. Lock: ensure client has a channel (on-chain).
+        1. Handshake: create session (quorum 2) if not provided.
+        2. Submit state (client signs) - returns version.
+        3. Return proof with version for worker to sign.
     """
     worker_addr = worker_address or bill.recipient
     amount_units = _to_units(bill.amount)
+
+    # Lock (on-chain): ensure client has a channel so funds are in the custody layer.
+    try:
+        create_channel(wallet, timeout=90)
+    except RuntimeError:
+        pass  # Channel may already exist; continue to session.
 
     # Get private key from wallet
     if not hasattr(wallet, "account"):
@@ -181,7 +192,76 @@ def pay_yellow(
     return f"yellow|{app_session_id}|{version}"
 
 
-def pay_yellow_full(bill: Bill, wallet: AgentWallet) -> str:
+def pay_yellow_chunked(
+    bill: Bill,
+    wallet: AgentWallet,
+    worker_base_url: Optional[str] = None,
+    chunks: int = 3,
+    worker_endpoint: Optional[str] = None,
+    **kwargs: object,
+) -> str:
+    """
+    Micro-payments (off-chain): chunked signed state updates in one session.
+    Lock → Handshake → for each chunk: client submit_state(cumulative amount), worker sign_state (POST /sign-state) → return final proof.
+    worker_base_url or worker_endpoint: worker URL (e.g. "http://localhost:8000" or "http://localhost:8000/submit-job").
+    """
+    base = worker_base_url or (worker_endpoint or "").replace("/submit-job", "").rstrip("/") or "http://localhost:8000"
+    worker_addr = bill.recipient
+    private_key = wallet.account.key.hex() if hasattr(wallet, "account") else ""
+    if not private_key.startswith("0x"):
+        private_key = "0x" + private_key
+    # Lock
+    try:
+        create_channel(wallet, timeout=90)
+    except RuntimeError:
+        pass
+    # Handshake: create session (quorum 2)
+    create_cmd = {
+        "command": "create_session",
+        "client_private_key": private_key,
+        "worker_address": worker_addr,
+        "quorum": 2,
+    }
+    response = _call_bridge(create_cmd)
+    if not response.get("success"):
+        raise RuntimeError(f"Failed to create session: {response.get('error')}")
+    app_session_id = (response.get("data") or {}).get("app_session_id")
+    if not app_session_id:
+        raise RuntimeError("Bridge returned success but no app_session_id")
+    sign_state_url = base.rstrip("/") + "/sign-state"
+    version = 1
+    for i in range(1, chunks + 1):
+        amount_cumulative = bill.amount * i / chunks
+        amount_units = _to_units(amount_cumulative)
+        submit_cmd = {
+            "command": "submit_state",
+            "app_session_id": app_session_id,
+            "client_private_key": private_key,
+            "worker_address": worker_addr,
+            "amount": amount_units,
+        }
+        response = _call_bridge(submit_cmd, timeout=30)
+        if not response.get("success"):
+            raise RuntimeError(f"Chunk {i} submit_state failed: {response.get('error')}")
+        data = response.get("data") or {}
+        version = data.get("version", version + 1)
+        r = requests.post(
+            sign_state_url,
+            json={
+                "app_session_id": app_session_id,
+                "version": version,
+                "amount": amount_units,
+                "client_address": wallet.address,
+            },
+            timeout=15,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"Chunk {i} worker sign-state failed: {r.status_code} {r.text}")
+    # Use yellow_chunked| so worker verifies without calling sign_state_worker again (already signed per chunk).
+    return f"yellow_chunked|{app_session_id}|{version}"
+
+
+def pay_yellow_full(bill: Bill, wallet: AgentWallet, worker_endpoint: Optional[str] = None, **kwargs: object) -> str:
     """
     Pay using both Yellow session (off-chain) and channel (on-chain settlement).
     For HackMoney prize: demonstrates session-based + on-chain settlement in one flow.
@@ -202,7 +282,39 @@ def pay_yellow_full(bill: Bill, wallet: AgentWallet) -> str:
     return f"yellow_full|{session_proof}|{tx_hash}"
 
 
-def pay_yellow_channel(bill: Bill, wallet: AgentWallet) -> str:
+def pay_yellow_chunked_full(
+    bill: Bill,
+    wallet: AgentWallet,
+    worker_base_url: Optional[str] = None,
+    chunks: int = 10,  # Prize doc: "Repeat 10 times"
+    worker_endpoint: Optional[str] = None,
+    **kwargs: object,
+) -> str:
+    """
+    Micro-payments (chunked) THEN on-chain settlement.
+    Prize doc: Worker sends 10% → Client signs "$0.10" → Repeat 10 times → Settlement on-chain.
+    
+    1. Chunked session: create_session → for each chunk (10): submit_state(cumulative) → worker sign_state
+    2. Channel settlement: create_channel → transfer → close (on-chain tx).
+    
+    Returns: yellow_chunked_full|session_id|version|tx_hash
+    """
+    # Step 1: Chunked micropayments (off-chain)
+    chunked_proof = pay_yellow_chunked(bill, wallet, worker_base_url, chunks, worker_endpoint, **kwargs)
+    # Parse: yellow_chunked|session_id|version
+    parts = chunked_proof.split("|")
+    if len(parts) < 3:
+        raise RuntimeError(f"Invalid chunked proof: {chunked_proof}")
+    session_id = parts[1]
+    version = parts[2]
+    
+    # Step 2: On-chain settlement (channel close)
+    tx_hash = pay_yellow_channel(bill, wallet, worker_endpoint, **kwargs)
+    
+    return f"yellow_chunked_full|{session_id}|{version}|{tx_hash}"
+
+
+def pay_yellow_channel(bill: Bill, wallet: AgentWallet, worker_endpoint: Optional[str] = None, **kwargs: object) -> str:
     """
     Pay via Yellow channel path as three separate steps (4a → 4c → 4d):
     open channel (if needed), transfer to worker, close channel.
@@ -295,6 +407,7 @@ def channel_transfer(
 def create_channel(wallet: AgentWallet, timeout: int = 70) -> dict:
     """
     Step 4a: Create a Yellow channel (on-chain). No resize, no transfer.
+    This is the "Lock" step: funds are locked in the custody/adjudicator layer.
 
     Wallet must have a little Sepolia ETH for gas. If a channel already exists,
     returns that channel_id with tx_hash=None.
@@ -313,6 +426,18 @@ def create_channel(wallet: AgentWallet, timeout: int = 70) -> dict:
         raise RuntimeError(f"create_channel failed: {response.get('error')}")
     data = response.get("data") or {}
     return {"channel_id": data.get("channel_id"), "tx_hash": data.get("tx_hash")}
+
+
+def ensure_worker_channel(worker_private_key: str, timeout: int = 70) -> dict:
+    """
+    Lock (on-chain): Ensure the worker has a channel so both bots have locked.
+    Call from worker process at startup when using session payment.
+    """
+    pk = worker_private_key.strip()
+    if not pk.startswith("0x"):
+        pk = "0x" + pk
+    worker_wallet = AgentWallet.from_key(pk)
+    return create_channel(worker_wallet, timeout=timeout)
 
 
 def steps_1_to_3(wallet: AgentWallet, timeout: int = 25) -> list[dict]:

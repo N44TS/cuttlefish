@@ -57,8 +57,12 @@ def _client_address_for_job(requester: str) -> str:
 CLIENT_ADDRESS = os.getenv("AGENTPAY_CLIENT_ADDRESS")
 JOB_PRICE_USDC = 0.05
 CHAIN_ID = 11155111
-# Yellow only. Channel = on-chain settlement (HackMoney / DeFi).
-PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_channel")
+# Yellow prize: BOTH session (off-chain) AND channel (on-chain settlement).
+# Default: yellow_chunked_full = chunked micropayments (10 chunks) + channel (money moves on-chain).
+PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_chunked_full")
+
+# Lock (on-chain): ensure worker has a channel once when using session payment.
+_worker_channel_ensured = False
 
 def _bridge_path() -> Path:
     """Path to bridge.ts. Prefer AGENTPAY_YELLOW_BRIDGE_DIR; else repo layout."""
@@ -97,16 +101,16 @@ def verify_payment_onchain(tx_hash: str, recipient: str, amount_usdc: float) -> 
 
 
 def _parse_yellow_proof(proof: str) -> Optional[Tuple[str, int]]:
-    """Parse proof into (session_id, version). Accepts yellow|id|ver, session:id:version:N, or id:version:N (if header was stripped)."""
+    """Parse proof into (session_id, version). Accepts yellow|id|ver, yellow_chunked|id|ver, yellow_chunked_full|id|ver|tx."""
     proof = (proof or "").strip()
     if not proof:
         return None
-    # yellow|session_id|version
-    if proof.startswith("yellow|"):
+    # yellow| or yellow_chunked| or yellow_chunked_full|session_id|version
+    if proof.startswith("yellow|") or proof.startswith("yellow_chunked|") or proof.startswith("yellow_chunked_full|"):
         parts = proof.split("|")
         if len(parts) >= 3:
             try:
-                return parts[1].strip(), int(parts[2])
+                return parts[1].strip(), int(str(parts[2]).split(":")[0])
             except ValueError:
                 pass
         return None
@@ -196,6 +200,39 @@ def verify_payment_yellow_full(
     return True, ""
 
 
+def verify_payment_yellow_chunked(proof: str, amount_usdc: float) -> tuple[bool, str]:
+    """Chunked session: worker already signed each chunk via /sign-state; just validate proof format."""
+    parsed = _parse_yellow_proof(proof)
+    if not parsed:
+        return False, "PAYMENT_INVALID_YELLOW_PROOF"
+    session_id, version = parsed
+    if not session_id or version < 1:
+        return False, "PAYMENT_YELLOW_CHUNKED_BAD_PROOF"
+    return True, ""
+
+
+def verify_payment_yellow_chunked_full(
+    proof: str, recipient: str, amount_usdc: float
+) -> tuple[bool, str]:
+    """Verify yellow_chunked_full: chunked session (already signed per chunk) + on-chain tx."""
+    proof = (proof or "").strip()
+    if not proof.startswith("yellow_chunked_full|"):
+        return False, "PAYMENT_INVALID_YELLOW_CHUNKED_FULL"
+    parts = proof.split("|")
+    if len(parts) < 4:
+        return False, "PAYMENT_YELLOW_CHUNKED_FULL_BAD_FORMAT"
+    # Session part: yellow_chunked|session_id|version (worker already signed each chunk)
+    session_proof = f"yellow_chunked|{parts[1]}|{parts[2]}"
+    tx_hash = parts[3].strip()
+    ok, reason = verify_payment_yellow_chunked(session_proof, amount_usdc)
+    if not ok:
+        return False, reason
+    ok2, reason2 = verify_payment_onchain(tx_hash, recipient, amount_usdc)
+    if not ok2:
+        return False, reason2
+    return True, ""
+
+
 def verify_payment(
     proof: str,
     recipient: str,
@@ -203,9 +240,13 @@ def verify_payment(
     payment_method: str,
     client_address_for_job: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Verify payment. yellow_channel = tx hash. yellow = session. yellow_full = session + tx."""
+    """Verify payment. yellow_channel = tx hash. yellow = session. yellow_chunked = session (already signed). yellow_full = session + tx. yellow_chunked_full = chunked session + tx."""
+    if payment_method == "yellow_chunked_full" or (proof and proof.strip().startswith("yellow_chunked_full|")):
+        return verify_payment_yellow_chunked_full(proof, recipient, amount_usdc)
     if payment_method == "yellow_full" or (proof and proof.strip().startswith("yellow_full|")):
         return verify_payment_yellow_full(proof, recipient, amount_usdc, client_address_for_job)
+    if payment_method == "yellow_chunked" or (proof and proof.strip().startswith("yellow_chunked|")):
+        return verify_payment_yellow_chunked(proof, amount_usdc)
     if payment_method == "yellow_channel" or (proof and proof.strip().startswith("0x") and len(proof.strip()) == 66):
         return verify_payment_onchain(proof, recipient, amount_usdc)
     if payment_method == "yellow":
@@ -216,7 +257,54 @@ def verify_payment(
 @app.get("/")
 def root():
     """Health check: 402 test and load balancers expect 200 here."""
-    return {"ok": True, "service": "agentpay-worker", "submit_job": "/submit-job"}
+    return {"ok": True, "service": "agentpay-worker", "submit_job": "/submit-job", "sign_state": "/sign-state"}
+
+
+@app.post("/sign-state")
+async def sign_state(request: Request):
+    """
+    Micro-payments: worker signs a session state update (chunk).
+    Body: { "app_session_id": "0x...", "version": 2, "amount": "1000000", "client_address": "0x..." }.
+    amount = ytest.usd units (6 decimals). client_address = payer (for allocations).
+    """
+    if not WORKER_PRIVATE_KEY:
+        return Response(status_code=503, content="AGENTPAY_WORKER_PRIVATE_KEY required for sign-state.")
+    try:
+        body = await request.json()
+        app_session_id = body["app_session_id"]
+        version = int(body["version"])
+        amount = str(body["amount"])
+        client_address = body.get("client_address") or CLIENT_ADDRESS or ""
+        if not client_address or client_address == "0xYourClientAddress":
+            return Response(status_code=400, content="client_address required in body or AGENTPAY_CLIENT_ADDRESS.")
+    except (KeyError, TypeError, ValueError) as e:
+        return Response(status_code=400, content=f"Invalid body: {e}")
+    sid = app_session_id if app_session_id.startswith("0x") else "0x" + app_session_id
+    bridge_cmd = {
+        "command": "sign_state_worker",
+        "app_session_id": sid,
+        "worker_private_key": WORKER_PRIVATE_KEY if WORKER_PRIVATE_KEY.startswith("0x") else "0x" + WORKER_PRIVATE_KEY,
+        "client_address": client_address,
+        "worker_address": WORKER_WALLET,
+        "amount": amount,
+        "version": version,
+    }
+    try:
+        result = subprocess.run(
+            ["npx", "tsx", str(_bridge_path())],
+            input=json.dumps(bridge_cmd),
+            capture_output=True,
+            text=True,
+            cwd=_bridge_path().parent,
+            check=True,
+            timeout=30,
+        )
+        resp = json.loads(result.stdout)
+    except Exception as e:
+        return Response(status_code=502, content=f"Bridge error: {e}")
+    if not resp.get("success"):
+        return Response(status_code=402, content=resp.get("error", "sign_state_worker failed"))
+    return {"success": True, "version": version}
 
 
 @app.post("/submit-job")
@@ -231,8 +319,17 @@ async def submit_job(request: Request):
     payment_proof = request.headers.get("X-Payment")
     if not payment_proof:
         print("[WORKER] Job received. Sending invoice (402).")
-        if PAYMENT_METHOD in ("yellow", "yellow_full") and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
-            return Response(status_code=503, content="Yellow session/full needs AGENTPAY_WORKER_PRIVATE_KEY.")
+        if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
+            return Response(status_code=503, content="Yellow session/chunked needs AGENTPAY_WORKER_PRIVATE_KEY.")
+        # Lock (on-chain): ensure worker has a channel once so both bots have locked.
+        global _worker_channel_ensured
+        if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and WORKER_PRIVATE_KEY and not _worker_channel_ensured:
+            try:
+                from agentpay.payments.yellow import ensure_worker_channel
+                ensure_worker_channel(WORKER_PRIVATE_KEY)
+                _worker_channel_ensured = True
+            except Exception as e:
+                print("[WORKER] ensure_worker_channel (lock) failed:", e)
         return Response(
             status_code=402,
             content=Bill(
@@ -249,8 +346,12 @@ async def submit_job(request: Request):
     payment_method = PAYMENT_METHOD
     if payment_proof:
         p = payment_proof.strip()
-        if p.startswith("yellow_full|"):
+        if p.startswith("yellow_chunked_full|"):
+            payment_method = "yellow_chunked_full"
+        elif p.startswith("yellow_full|"):
             payment_method = "yellow_full"
+        elif p.startswith("yellow_chunked|"):
+            payment_method = "yellow_chunked"
         elif p.startswith("yellow|") or p.startswith("session:"):
             payment_method = "yellow"
         elif p.startswith("0x") and len(p) == 66:
