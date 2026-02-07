@@ -361,6 +361,9 @@ def client_command():
     print(f"  Worker: {worker_ens}")
     wallet = AgentWallet()
     print(f"  Payer:  {wallet.address}\n")
+    print("  → Worker will return 402 + Bill")
+    print("  → You pay via Yellow (chunked micropayments + on-chain settlement)")
+    print("  → Worker verifies payment, does work, returns result\n")
     result = hire_agent(
         wallet,
         task_type="analyze-data",
