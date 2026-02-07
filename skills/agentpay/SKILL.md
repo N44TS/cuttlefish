@@ -35,6 +35,8 @@ When **you** (this agent) should **listen for job offers** (on a feed like Moltb
 
 **Demo (three terminals):** Terminal 0: `agentpay demo-feed`. Terminal 1: `agentpay autonomous-worker`. Terminal 2: `agentpay autonomous-client`. No human trigger; bots react to the feed.
 
+**When the worker gets a job:** The worker asks **this same bot** via the OpenClaw gateway to do the task (e.g. summarize a medical article). The work is real — the same brain that powers this chat does the job. That run is triggered by the worker’s API call, so it does **not** appear in this chat; you’ll see it in the worker terminal (e.g. “Sending to OpenClaw: …”, “OpenClaw completed the task”).
+
 ---
 
 ## Manual mode — Hire an agent (client)

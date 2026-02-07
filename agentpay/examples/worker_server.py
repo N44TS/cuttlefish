@@ -404,9 +404,13 @@ async def submit_job(request: Request):
     bal_before = _worker_yellow_balance()
     if bal_before is not None:
         print(f"[WORKER] Balance (after payment, before job): {bal_before}")
+    inp = job.input_data or {}
+    query = (inp.get("query") or inp.get("text") or "")
+    n = len(query)
+    print(f"[WORKER] Sending to OpenClaw: {job.task_type} ({n} chars)")
     try:
         from agentpay.llm_task import do_task
-        result = do_task(job.task_type, job.input_data or {})
+        result = do_task(job.task_type, inp)
         print("[WORKER] OpenClaw completed the task.")
     except RuntimeError as e:
         print(f"[WORKER] OpenClaw required but failed: {e}")
