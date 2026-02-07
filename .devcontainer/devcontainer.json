@@ -1,8 +1,15 @@
 {
   "name": "OpenClaw Demo",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "image": "[mcr.microsoft.com/devcontainers/base:ubuntu](https://mcr.microsoft.com/devcontainers/base:ubuntu)",
   "features": {
     "node": "22"
   },
-  "postCreateCommand": "apt-get update && apt-get install -y curl && curl -fsSL https://openclaw.ai/install.sh | bash && .devcontainer/setup-openclaw-skill.sh"
+  "postCreateCommand": "apt update && apt install -y curl && curl -fsSL [https://openclaw.ai/install.sh](https://openclaw.ai/install.sh) | bash",
+  "skills": {
+    "entries": {
+      "agentpay": {
+        "enabled": true
+      }
+    }
+  }
 }
