@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy agentpay skill into ~/.openclaw/skills and ensure it's in openclaw.json.
+# Copy agentpay skill into ~/.openclaw/skills and into openclaw package dir so gateway finds it.
 # Run from repo root (e.g. by postCreateCommand).
 set -e
 OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
@@ -7,6 +7,20 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 mkdir -p "$OPENCLAW_HOME/skills"
 cp -r "$REPO_ROOT/skills/agentpay" "$OPENCLAW_HOME/skills/"
+
+# Gateway may load skills from the openclaw package dir (e.g. node_modules/openclaw/skills/)
+OPENCLAW_PKG=""
+for candidate in "$(npm root -g 2>/dev/null)/openclaw" "$(npm root 2>/dev/null)/openclaw"; do
+  if [ -d "$candidate" ]; then
+    OPENCLAW_PKG="$candidate"
+    break
+  fi
+done
+if [ -n "$OPENCLAW_PKG" ]; then
+  mkdir -p "$OPENCLAW_PKG/skills"
+  cp -r "$REPO_ROOT/skills/agentpay" "$OPENCLAW_PKG/skills/"
+  echo "AgentPay skill also installed at $OPENCLAW_PKG/skills/agentpay (for gateway)"
+fi
 
 CONFIG_FILE="$OPENCLAW_HOME/openclaw.json"
 mkdir -p "$(dirname "$CONFIG_FILE")"

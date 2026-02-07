@@ -64,8 +64,12 @@ def request_job(
     headers = headers or {}
     payload = job.to_submit_payload()
 
-    # 1) Submit without payment
-    r = requests.post(worker_endpoint, json=payload, headers=headers, timeout=30)
+    # 1) Submit without payment (worker returns 402 + Bill; ensure worker channel is done at worker startup)
+    submit_timeout = 60
+    _env = os.getenv("AGENTPAY_JOB_SUBMIT_TIMEOUT", "").strip()
+    if _env.isdigit():
+        submit_timeout = int(_env)
+    r = requests.post(worker_endpoint, json=payload, headers=headers, timeout=submit_timeout)
     if r.status_code == 200:
         return JobResult(**r.json())
     if r.status_code != 402:

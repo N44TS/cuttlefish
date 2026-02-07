@@ -55,6 +55,7 @@ app = FastAPI()
 @app.on_event("startup")
 def _print_balance_and_llm_at_startup():
     """So judges can see worker balance and whether the worker has a real brain (LLM)."""
+    global _worker_channel_ensured
     _write_agentpay_status("idle")
     bal = _worker_yellow_balance()
     if bal is not None:
@@ -66,6 +67,16 @@ def _print_balance_and_llm_at_startup():
         print("[WORKER] OpenClaw is required. Run 'agentpay setup-openclaw' and start 'openclaw gateway'.")
         sys.exit(1)
     print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
+    # Ensure worker Yellow channel at startup so 402 returns immediately (no 120s block on first job).
+    if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and WORKER_PRIVATE_KEY:
+        try:
+            from agentpay.payments.yellow import ensure_worker_channel
+            ensure_worker_channel(WORKER_PRIVATE_KEY)
+            _worker_channel_ensured = True
+            print("[WORKER] Yellow worker channel ready (lock step done).")
+        except Exception as e:
+            print("[WORKER] ensure_worker_channel at startup failed:", e)
+            print("[WORKER] First job may fail at payment. Fix bridge/RPC and restart worker.")
 
 SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
 # USDC Sepolia
@@ -383,15 +394,7 @@ async def submit_job(request: Request):
         print("[WORKER] Job received. Sending invoice (402).")
         if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
             return Response(status_code=503, content="Yellow session/chunked needs AGENTPAY_WORKER_PRIVATE_KEY.")
-        # Lock (on-chain): ensure worker has a channel once so both bots have locked.
-        global _worker_channel_ensured
-        if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and WORKER_PRIVATE_KEY and not _worker_channel_ensured:
-            try:
-                from agentpay.payments.yellow import ensure_worker_channel
-                ensure_worker_channel(WORKER_PRIVATE_KEY)
-                _worker_channel_ensured = True
-            except Exception as e:
-                print("[WORKER] ensure_worker_channel (lock) failed:", e)
+        # Worker channel is ensured at startup so we return 402 immediately (no blocking here).
         return Response(
             status_code=402,
             content=Bill(
