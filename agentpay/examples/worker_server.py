@@ -35,12 +35,11 @@ def _print_balance_and_llm_at_startup():
         print(f"[WORKER] Balance before any job: {bal}")
     else:
         print("[WORKER] Balance check skipped (Yellow bridge or key unavailable).")
-    if os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD"):
-        print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
-    elif os.getenv("OPENAI_API_KEY") or os.getenv("AGENTPAY_LLM_API_KEY"):
-        print("[WORKER] LLM API configured — worker will do real work via direct LLM.")
-    else:
-        print("[WORKER] Set OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_GATEWAY_PASSWORD) for real bot work, or OPENAI_API_KEY for LLM; otherwise fallback text only.")
+    token = (os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD") or "").strip()
+    if not token:
+        print("[WORKER] OpenClaw is required. Run 'agentpay setup-openclaw' and start 'openclaw gateway'.")
+        sys.exit(1)
+    print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
 
 SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
 # USDC Sepolia
@@ -405,17 +404,16 @@ async def submit_job(request: Request):
     bal_before = _worker_yellow_balance()
     if bal_before is not None:
         print(f"[WORKER] Balance (after payment, before job): {bal_before}")
-    # OpenClaw first (real bot does the work), then LLM, then fallback
     try:
         from agentpay.llm_task import do_task
         result = do_task(job.task_type, job.input_data or {})
-        if "Worker note:" in result or "[Worker note:" in result:
-            print("[WORKER] Completed with fallback text (OpenClaw and LLM not configured or failed).")
-        else:
-            print("[WORKER] OpenClaw/LLM completed the task (real work).")
+        print("[WORKER] OpenClaw completed the task.")
+    except RuntimeError as e:
+        print(f"[WORKER] OpenClaw required but failed: {e}")
+        return Response(status_code=503, content=str(e))
     except Exception as e:
-        result = f"Worker completed {job.task_type} for {job.requester} (error: {e})"
-        print(f"[WORKER] Task failed, returning fallback: {e}")
+        print(f"[WORKER] Task error: {e}")
+        return Response(status_code=503, content=str(e))
     bal_after = _worker_yellow_balance()
     if bal_after is not None:
         print(f"[WORKER] Balance after job: {bal_after}")

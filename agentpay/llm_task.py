@@ -1,11 +1,9 @@
 """
-Worker "brain": do the job via OpenClaw (real bot) or fallback to an LLM API.
+Worker "brain": do the job via OpenClaw only (real bot).
 
-Preferred: OpenClaw Gateway. Worker calls the same OpenClaw bot you chat with
-(POST /v1/chat/completions). The bot does the work — real work, not fake.
-Requires: gateway endpoint enabled, OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_GATEWAY_PASSWORD).
-
-Fallback: direct LLM (OPENAI_API_KEY or AGENTPAY_LLM_API_KEY) if OpenClaw not configured.
+The worker calls the OpenClaw bot you chat with (POST /v1/chat/completions).
+Requires: gateway endpoint enabled, OPENCLAW_GATEWAY_URL, OPENCLAW_GATEWAY_TOKEN.
+Run agentpay setup-openclaw to add these to .env; start openclaw gateway.
 """
 
 import os
@@ -123,12 +121,20 @@ def _fallback_result(task_type: str, input_data: Dict[str, Any], reason: str) ->
 
 def do_task(task_type: str, input_data: Dict[str, Any]) -> str:
     """
-    Do the job: try OpenClaw (real bot) first, then direct LLM, then fallback text.
-    Use this in the worker so the bot does real work when possible.
+    Do the job via OpenClaw only. No LLM fallback — the bot must do the work.
+    Raises RuntimeError if OpenClaw is not configured or the call fails.
     """
-    # 1) OpenClaw Gateway — same bot you chat with does the work
     out = do_task_via_openclaw(task_type, input_data or {})
     if out is not None:
         return out
-    # 2) Direct LLM API
-    return do_task_with_llm(task_type, input_data or {})
+    token = (os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD") or "").strip()
+    if not token:
+        raise RuntimeError(
+            "OpenClaw is required. Run 'agentpay setup-openclaw' and add OPENCLAW_GATEWAY_TOKEN to .env, "
+            "then start the gateway (openclaw gateway) with chatCompletions enabled."
+        )
+    raise RuntimeError(
+        "OpenClaw gateway call failed (wrong URL, gateway down, or endpoint disabled). "
+        "Check OPENCLAW_GATEWAY_URL, run 'openclaw gateway', and enable: "
+        "openclaw config set gateway.http.endpoints.chatCompletions.enabled true"
+    )

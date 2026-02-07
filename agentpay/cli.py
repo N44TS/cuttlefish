@@ -468,7 +468,8 @@ def autonomous_worker_command():
     daemon = threading.Thread(target=run_autonomous_agent, args=(config,), daemon=True)
     daemon.start()
     print("Autonomous mode: worker server + background feed watcher.")
-    print("When an offer appears on the feed (AGENTPAY_DEMO_FEED_URL), this agent will reply with your ENS and get hired. No feed = same as 'agentpay worker' until a feed is running.")
+    print("  • AGENTPAY_DEMO_FEED_URL = where to watch for offers (e.g. http://localhost:8765 — run agentpay demo-feed there).")
+    print("  • OpenClaw = who does the job (OPENCLAW_GATEWAY_* in .env; run 'openclaw gateway' in another terminal).")
     print("Starting worker server...")
     worker_command()
 
