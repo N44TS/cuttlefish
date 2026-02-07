@@ -17,9 +17,10 @@ def watch_moltbook_feed(
     on_accept: Callable[[dict], None],
     poll_interval_seconds: int = 60,
     feed_provider: Optional[Callable[[], List[dict]]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
-    Run forever: poll feed, parse posts, call on_offer / on_accept.
+    Poll feed, parse posts, call on_offer / on_accept. Exits when should_stop() is True.
 
     Args:
         on_offer: Called with parsed offer dict (task_type, poster_ens, price, input_ref).
@@ -28,6 +29,7 @@ def watch_moltbook_feed(
         feed_provider: Optional. Callable that returns a list of feed items.
             Each item should have "text" or "body" (and optionally "id", "thread_id").
             If None, no items are fetched (stub mode for testing).
+        should_stop: Optional. If set, called after processing items; when True, loop exits.
     """
     while True:
         items = (feed_provider() if feed_provider else []) or []
@@ -47,4 +49,6 @@ def watch_moltbook_feed(
             a = parse_accept(text)
             if a:
                 on_accept({"worker_ens": a.worker_ens, "_item": item})
+        if should_stop and should_stop():
+            return
         time.sleep(poll_interval_seconds)

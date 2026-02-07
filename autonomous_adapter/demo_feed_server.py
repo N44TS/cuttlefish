@@ -83,6 +83,11 @@ class FeedHandler(BaseHTTPRequestHandler):
         now = datetime.now(timezone.utc).isoformat()
         item = {"id": post_id, "text": text, "thread_id": thread_id, "created_at": now}
         FEED.append(item)
+        # Show the "conversation" in the feed terminal so humans see what's happening
+        preview = text.replace("\n", " ").strip()[:120]
+        if len(text) > 120:
+            preview += "..."
+        print(f"[FEED] POST #{post_id}: {preview}")
         self._send_json(201, item)
 
 

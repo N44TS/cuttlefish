@@ -26,6 +26,22 @@ from agentpay.schema import Job, Bill, JobResult
 
 app = FastAPI()
 
+
+@app.on_event("startup")
+def _print_balance_and_llm_at_startup():
+    """So judges can see worker balance and whether the worker has a real brain (LLM)."""
+    bal = _worker_yellow_balance()
+    if bal is not None:
+        print(f"[WORKER] Balance before any job: {bal}")
+    else:
+        print("[WORKER] Balance check skipped (Yellow bridge or key unavailable).")
+    if os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD"):
+        print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
+    elif os.getenv("OPENAI_API_KEY") or os.getenv("AGENTPAY_LLM_API_KEY"):
+        print("[WORKER] LLM API configured — worker will do real work via direct LLM.")
+    else:
+        print("[WORKER] Set OPENCLAW_GATEWAY_TOKEN (or OPENCLAW_GATEWAY_PASSWORD) for real bot work, or OPENAI_API_KEY for LLM; otherwise fallback text only.")
+
 SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
 # USDC Sepolia
 USDC = "0x25762231808F040410586504fDF08Df259A2163c"
@@ -45,6 +61,27 @@ def _worker_wallet():
     return "0xYourWorkerAddress"
 
 WORKER_WALLET = _worker_wallet()
+
+
+def _worker_yellow_balance() -> Optional[str]:
+    """Get worker's ytest.usd balance for display. Returns formatted string or None if unavailable."""
+    if not WORKER_PRIVATE_KEY:
+        return None
+    try:
+        from eth_account import Account
+        from agentpay.wallet import AgentWallet
+        from agentpay.faucet import check_yellow_balance
+        pk = WORKER_PRIVATE_KEY.strip()
+        if not pk.startswith("0x"):
+            pk = "0x" + pk
+        acc = Account.from_key(pk)
+        wallet = AgentWallet(account=acc)
+        bal, _ = check_yellow_balance(wallet)
+        if bal is not None:
+            return f"{bal:.2f} ytest.usd"
+    except Exception:
+        pass
+    return None
 
 def _client_address_for_job(requester: str) -> str:
     """Client address for Yellow: env or job requester."""
@@ -365,7 +402,23 @@ async def submit_job(request: Request):
         debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
         return Response(status_code=402, content=f"{reason} (received: {debug})")
     print("[WORKER] Payment verified. Doing work...")
-    result = f"Worker completed {job.task_type} for {job.requester}"
+    bal_before = _worker_yellow_balance()
+    if bal_before is not None:
+        print(f"[WORKER] Balance (after payment, before job): {bal_before}")
+    # OpenClaw first (real bot does the work), then LLM, then fallback
+    try:
+        from agentpay.llm_task import do_task
+        result = do_task(job.task_type, job.input_data or {})
+        if "Worker note:" in result or "[Worker note:" in result:
+            print("[WORKER] Completed with fallback text (OpenClaw and LLM not configured or failed).")
+        else:
+            print("[WORKER] OpenClaw/LLM completed the task (real work).")
+    except Exception as e:
+        result = f"Worker completed {job.task_type} for {job.requester} (error: {e})"
+        print(f"[WORKER] Task failed, returning fallback: {e}")
+    bal_after = _worker_yellow_balance()
+    if bal_after is not None:
+        print(f"[WORKER] Balance after job: {bal_after}")
     print("[WORKER] Done. Returning result.")
     return {
         "status": "completed",

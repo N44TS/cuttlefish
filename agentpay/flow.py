@@ -93,6 +93,8 @@ def request_job(
         payment_method = bill.payment_method or "yellow_channel"
         pay_fn = get_pay_fn(payment_method)
 
+    print(f"[CLIENT] Worker (recipient) will receive {bill.amount} ytest.usd. Worker terminal will show balance before/after.")
+
     # 4) Pay (worker_endpoint passed for chunked flow so client can POST to /sign-state)
     try:
         proof = pay_fn(bill, wallet, worker_endpoint=worker_endpoint)
@@ -124,6 +126,9 @@ def request_job(
             error=f"Resubmit returned {r2.status_code}: {r2.text}",
         )
     result = JobResult(**r2.json())
+
+    if result.status == "completed":
+        print(f"[CLIENT] Settlement complete. Worker received payment — check worker terminal for balance after.")
 
     # 5b) Attach session_id or tx hash for client to use
     if proof:

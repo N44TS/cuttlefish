@@ -39,17 +39,30 @@ def run_autonomous_agent(config: Dict[str, Any]) -> None:
     on_offer = config.get("on_offer")
     on_accept = config.get("on_accept")
     poll_interval_seconds = config.get("poll_interval_seconds", 60)
+    exit_after_first_accept = config.get("exit_after_first_accept", False)
 
     if not callable(on_offer):
         on_offer = _noop
     if not callable(on_accept):
         on_accept = _noop
 
+    should_stop = None
+    if exit_after_first_accept:
+        done = [False]
+
+        def _on_accept_wrapper(accept: dict) -> None:
+            on_accept(accept)
+            done[0] = True
+
+        on_accept = _on_accept_wrapper
+        should_stop = lambda: done[0]
+
     watch_moltbook_feed(
         on_offer=on_offer,
         on_accept=on_accept,
         poll_interval_seconds=poll_interval_seconds,
         feed_provider=feed_provider,
+        should_stop=should_stop,
     )
 
 

@@ -19,6 +19,51 @@ def _load_dotenv():
     except ImportError:
         pass
 
+
+def _try_add_openclaw_to_env(env_path: Path) -> None:
+    """If user says yes, read OpenClaw config and add OPENCLAW_GATEWAY_* to .env so no manual export."""
+    try:
+        use = input("\nUse OpenClaw so your bot does real work when jobs come in? (y/n): ").strip().lower()
+        if use != "y":
+            return
+    except Exception:
+        return
+    config_paths = [
+        Path.home() / ".openclaw" / "openclaw.json",
+        Path.home() / ".clawdbot" / "clawdbot.json",
+    ]
+    config = None
+    for p in config_paths:
+        if p.exists():
+            try:
+                import json
+                config = json.loads(p.read_text())
+                break
+            except Exception:
+                continue
+    if not config:
+        print("   OpenClaw config not found. Add OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_TOKEN to .env later if you use OpenClaw.")
+        print("   See agentpay/docs/OPENCLAW_SETUP.md Part 5.")
+        return
+    gateway = config.get("gateway") or {}
+    auth = gateway.get("auth") or {}
+    token = (auth.get("token") or auth.get("password") or "").strip()
+    port = gateway.get("port", 18789)
+    if not token:
+        print("   No gateway token in OpenClaw config. Add OPENCLAW_GATEWAY_TOKEN to .env later.")
+        return
+    url = f"http://127.0.0.1:{port}"
+    try:
+        with open(env_path, "a") as f:
+            f.write(f"\n# OpenClaw — worker asks your bot to do jobs\n")
+            f.write(f"OPENCLAW_GATEWAY_URL={url}\n")
+            f.write(f"OPENCLAW_GATEWAY_TOKEN={token}\n")
+        print("   ✅ Added OpenClaw gateway URL and token to .env (no manual export needed).")
+        print("   If the gateway HTTP API is off, run once: openclaw config set gateway.http.endpoints.chatCompletions.enabled true")
+        print("   Then restart the gateway (openclaw gateway).")
+    except Exception as e:
+        print(f"   Could not append to .env: {e}. Add OPENCLAW_GATEWAY_URL and OPENCLAW_GATEWAY_TOKEN yourself.")
+
 def setup_command():
     """Interactive setup: generate wallet, register ENS, provision endpoint."""
     print("╔═══════════════════════════════════════════════════════════════╗")
@@ -143,6 +188,9 @@ def setup_command():
                 input("Press Enter after you have run the above, or Enter to continue anyway...")
         elif _bridge_ts.exists():
             print("\n✅ Yellow bridge ready (node_modules present).")
+        # OpenClaw: so the worker asks the real bot to do jobs (plug-and-play)
+        if saved_env:
+            _try_add_openclaw_to_env(env_path)
         print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print(f"YOU CAN DO BOTH — receive work and give work (same wallet)")
         print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -426,7 +474,7 @@ def autonomous_worker_command():
 
 
 def autonomous_client_command():
-    """Run autonomous client loop: post one offer, watch for accepts, trigger AgentPay hire."""
+    """Run autonomous client: post one offer, watch for one accept, trigger hire, then exit."""
     _load_dotenv()
     from pathlib import Path
     _root = Path(__file__).resolve().parent.parent
@@ -435,6 +483,7 @@ def autonomous_client_command():
     if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
         print("CLIENT_PRIVATE_KEY required for client (payer). Set in .env or export.")
         sys.exit(1)
+    print("⚠️  Client (payer) must use a DIFFERENT wallet than the worker. In this terminal set CLIENT_PRIVATE_KEY to the PAYER key, not the worker's.")
     try:
         from autonomous_adapter import run_autonomous_agent, build_demo_config
     except ImportError as e:
@@ -447,10 +496,20 @@ def autonomous_client_command():
         sys.exit(1)
     ens_name = os.getenv("AGENTPAY_ENS_NAME", "client").strip().removesuffix(".eth")
     offer_store = {}
-    initial = {"task_type": "analyze-data", "price": "0.05 AP", "input_data": {"query": "Demo task"}, "poster_ens": ens_name}
+    # One real-looking job: summarise a medical article (worker does the work and gets paid once)
+    medical_query = "Summarise this medical article in 2-3 sentences: Hypertension affects one in three adults. Key interventions include lifestyle modification (diet, exercise) and antihypertensive therapy. Guidelines recommend regular BP monitoring and stepped care."
+    initial = {
+        "task_type": "analyze-data",
+        "price": "0.05 AP",
+        "input_data": {"query": medical_query},
+        "input_ref": "Summarise medical article (see query in job)",
+        "poster_ens": ens_name,
+    }
     config = build_demo_config("client", my_ens=ens_name, offer_store=offer_store, poll_interval_seconds=20, initial_offer=initial)
-    print("Autonomous client: posted initial offer, watching for accepts...")
+    config["exit_after_first_accept"] = True
+    print("Autonomous client: posting one offer (medical article summary), watching for one accept, then hiring and exiting...")
     run_autonomous_agent(config)
+    print("\n✅ Client finished: one job posted, one hire completed, exiting.")
 
 
 def main():
