@@ -16,17 +16,19 @@ from .trigger_agentpay import trigger_hire_from_accept
 
 def _ens_from_env_file() -> str:
     """Read AGENTPAY_ENS_NAME from .env so we avoid shell truncation (e.g. 13-char export limit)."""
-    path = Path.cwd() / ".env"
-    if not path.exists():
-        return ""
-    try:
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if line.startswith("AGENTPAY_ENS_NAME="):
-                val = line.split("=", 1)[1].strip().strip("'\"")
-                return val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
-    except Exception:
-        pass
+    for path in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if not path.exists():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line.startswith("AGENTPAY_ENS_NAME="):
+                    val = line.split("=", 1)[1].strip().strip("'\"")
+                    val = val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
+                    if val:
+                        return val
+        except Exception:
+            continue
     return ""
 
 
@@ -71,7 +73,7 @@ def build_demo_config(
     initial_offer: If role=client, optional dict { task_type, price?, input_data?, poster_ens? }.
       When provided, we post this offer once before the loop and store it so we can trigger hire later.
     """
-    # Prefer .env file so ENS is not truncated by shell (e.g. export 13-char limit)
+    # Prefer .env file so ENS is not truncated by shell (e.g. export char limits). No hardcoded names — each user has their own ENS.
     raw = (my_ens or _ens_from_env_file() or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth").replace("\r", "").replace("\n", "").strip()
     my_ens = raw
     if role == "worker" and not my_ens:

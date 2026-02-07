@@ -483,9 +483,8 @@ def autonomous_worker_command():
     except ImportError as e:
         print("autonomous_adapter required. Run from repo root: pip install -e .")
         sys.exit(1)
-    # Prefer reading from .env file so ENS name is not truncated (e.g. democuttlefish not democuttlefis)
-    env_path = Path.cwd() / ".env"
-    ens_name = _ens_name_from_env_file(env_path)
+    # Prefer .env file (cwd then repo root) so ENS is not truncated by shell (e.g. 13-char export limit)
+    ens_name = _ens_name_from_env_file(Path.cwd() / ".env") or _ens_name_from_env_file(_root / ".env")
     if not ens_name:
         ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     if not ens_name:
