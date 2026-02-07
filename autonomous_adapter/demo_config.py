@@ -54,7 +54,8 @@ def build_demo_config(
     initial_offer: If role=client, optional dict { task_type, price?, input_data?, poster_ens? }.
       When provided, we post this offer once before the loop and store it so we can trigger hire later.
     """
-    my_ens = (my_ens or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth")
+    raw = (my_ens or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth").replace("\r", "").replace("\n", "").strip()
+    my_ens = raw
     if role == "worker" and not my_ens:
         my_ens = "worker"
     ens_suffix = f"{my_ens}.eth" if my_ens else "me.eth"

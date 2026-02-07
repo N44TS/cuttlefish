@@ -461,7 +461,7 @@ def autonomous_worker_command():
     except ImportError as e:
         print("autonomous_adapter required. Run from repo root: pip install -e .")
         sys.exit(1)
-    ens_name = os.getenv("AGENTPAY_ENS_NAME", "").strip().removesuffix(".eth")
+    ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     if not ens_name:
         ens_name = "worker"
     config = build_demo_config("worker", my_ens=ens_name, poll_interval_seconds=20)
@@ -484,7 +484,18 @@ def autonomous_client_command():
     if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
         print("CLIENT_PRIVATE_KEY required for client (payer). Set in .env or export.")
         sys.exit(1)
-    print("⚠️  Client (payer) must use a DIFFERENT wallet than the worker. In this terminal set CLIENT_PRIVATE_KEY to the PAYER key, not the worker's.")
+    # Only warn if both keys are in env and they're the same address
+    try:
+        from eth_account import Account
+        pk = (os.getenv("CLIENT_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY") or "").strip()
+        worker_pk = (os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or "").strip()
+        if pk and worker_pk:
+            client_addr = Account.from_key(pk).address.lower()
+            worker_addr = Account.from_key(worker_pk).address.lower()
+            if client_addr == worker_addr:
+                print("⚠️  Client and worker are the same wallet. Use a different CLIENT_PRIVATE_KEY (payer) for the client.")
+    except Exception:
+        pass
     try:
         from autonomous_adapter import run_autonomous_agent, build_demo_config
     except ImportError as e:
@@ -495,7 +506,7 @@ def autonomous_client_command():
         print("Set AGENTPAY_DEMO_FEED_URL to the demo feed URL (e.g. http://localhost:8765)")
         print("Start the feed with: agentpay demo-feed")
         sys.exit(1)
-    ens_name = os.getenv("AGENTPAY_ENS_NAME", "client").strip().removesuffix(".eth")
+    ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "client").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     offer_store = {}
     # One real-looking job: summarise a medical article (worker does the work and gets paid once)
     medical_query = "Summarise this medical article in 2-3 sentences: Hypertension affects one in three adults. Key interventions include lifestyle modification (diet, exercise) and antihypertensive therapy. Guidelines recommend regular BP monitoring and stepped care."
