@@ -24,12 +24,38 @@ from web3 import Web3
 
 from agentpay.schema import Job, Bill, JobResult
 
+
+def _agentpay_status_path() -> Path:
+    p = os.getenv("AGENTPAY_STATUS_FILE", "").strip()
+    if p:
+        return Path(p)
+    return Path(os.path.expanduser("~/.openclaw/workspace/agentpay_status.json"))
+
+
+def _write_agentpay_status(status: str, task_type: str = "", balance_after: Optional[str] = None, error: Optional[str] = None) -> None:
+    """Write status so TUI/skill can report 'am I working / did I just finish?'"""
+    path = _agentpay_status_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "status": status,
+            "task_type": task_type,
+            "balance_after": balance_after,
+            "error": error,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 app = FastAPI()
 
 
 @app.on_event("startup")
 def _print_balance_and_llm_at_startup():
     """So judges can see worker balance and whether the worker has a real brain (LLM)."""
+    _write_agentpay_status("idle")
     bal = _worker_yellow_balance()
     if bal is not None:
         print(f"[WORKER] Balance before any job: {bal}")
@@ -401,6 +427,7 @@ async def submit_job(request: Request):
         debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
         return Response(status_code=402, content=f"{reason} (received: {debug})")
     print("[WORKER] Payment verified. Doing work...")
+    _write_agentpay_status("working", task_type=job.task_type)
     bal_before = _worker_yellow_balance()
     if bal_before is not None:
         print(f"[WORKER] Balance (after payment, before job): {bal_before}")
@@ -414,13 +441,17 @@ async def submit_job(request: Request):
         print("[WORKER] OpenClaw completed the task.")
     except RuntimeError as e:
         print(f"[WORKER] OpenClaw required but failed: {e}")
+        _write_agentpay_status("idle", error=str(e))
         return Response(status_code=503, content=str(e))
     except Exception as e:
         print(f"[WORKER] Task error: {e}")
+        _write_agentpay_status("idle", error=str(e))
         return Response(status_code=503, content=str(e))
     bal_after = _worker_yellow_balance()
+    bal_str = str(bal_after) if bal_after is not None else None
     if bal_after is not None:
         print(f"[WORKER] Balance after job: {bal_after}")
+    _write_agentpay_status("completed", task_type=job.task_type, balance_after=bal_str)
     print("[WORKER] Done. Returning result.")
     return {
         "status": "completed",

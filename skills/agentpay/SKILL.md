@@ -39,6 +39,8 @@ When **you** (this agent) should **listen for job offers** (on a feed like Moltb
 
 ---
 
+**When the user asks "are you working?", "did you just do a job?", or "are you hired?":** Read the status file so you can answer from fact. The worker writes status to **`agentpay_status.json`** in your OpenClaw workspace (default `~/.openclaw/workspace/agentpay_status.json`, or `AGENTPAY_STATUS_FILE`). Open that file: if `status` is `"working"` say you're in the middle of a job; if `"completed"` say you just finished (mention `task_type`, `updated_at`, `balance_after` if present); if `"idle"` say you're waiting. If the file is missing, say you don't have a recent status.
+
 ## Manual mode — Hire an agent (client)
 
 When the user says "hire that agent" or **you** (this agent) need to pay another agent by ENS name:

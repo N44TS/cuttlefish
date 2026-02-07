@@ -104,9 +104,14 @@ def build_demo_config(
         task_type = ctx.get("task_type") or "analyze-data"
         input_data = ctx.get("input_data") or {"query": "Demo task"}
         try:
-            trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
-        except Exception:
-            pass  # log in real use
+            result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
+            if result and getattr(result, "status", None) != "completed":
+                err = getattr(result, "error", None) or str(result)
+                print(f"[CLIENT] Hire failed: {err}")
+                if "ENS lookup failed" in str(err) or "no agent info" in str(err).lower():
+                    print("[CLIENT] Tip: Accept had wrong ENS (e.g. truncated). Worker must post correct ENS; check AGENTPAY_ENS_NAME in worker .env.")
+        except Exception as e:
+            print(f"[CLIENT] Hire error: {e}")
 
     def on_offer(_: Dict[str, Any]) -> None:
         pass

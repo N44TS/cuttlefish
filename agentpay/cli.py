@@ -20,6 +20,23 @@ def _load_dotenv():
         pass
 
 
+def _ens_name_from_env_file(env_path: Optional[Path] = None) -> str:
+    """Read AGENTPAY_ENS_NAME from .env file directly to avoid truncation (e.g. 13-char limit)."""
+    path = env_path or Path.cwd() / ".env"
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("AGENTPAY_ENS_NAME="):
+                val = line.split("=", 1)[1].strip().strip('"\'')
+                val = val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
+                return val
+    except Exception:
+        pass
+    return ""
+
+
 def _try_add_openclaw_to_env(env_path: Path) -> None:
     """If user says yes, read OpenClaw config and add OPENCLAW_GATEWAY_* to .env so no manual export."""
     try:
@@ -461,7 +478,11 @@ def autonomous_worker_command():
     except ImportError as e:
         print("autonomous_adapter required. Run from repo root: pip install -e .")
         sys.exit(1)
-    ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
+    # Prefer reading from .env file so ENS name is not truncated (e.g. democuttlefish not democuttlefis)
+    env_path = Path.cwd() / ".env"
+    ens_name = _ens_name_from_env_file(env_path)
+    if not ens_name:
+        ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     if not ens_name:
         ens_name = "worker"
     config = build_demo_config("worker", my_ens=ens_name, poll_interval_seconds=20)
