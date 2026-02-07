@@ -56,6 +56,9 @@ def request_job(
 
     worker_endpoint: e.g. "https://worker.example.com/submit-job"
     pay_fn: (bill, wallet) -> payment_proof (e.g. tx_hash). Default: get_pay_fn() (Circle if configured, else Sepolia).
+
+    Timeouts: (1) Payment (bridge create/transfer/close) uses AGENTPAY_BRIDGE_TIMEOUT_*. (2) After paying,
+    the client waits for the worker to run the job and return; that wait is AGENTPAY_JOB_RESULT_TIMEOUT (default 300s).
     """
     pay_fn = pay_fn or get_pay_fn()
     headers = headers or {}
@@ -117,9 +120,14 @@ def request_job(
         _wait_for_receipt(tx_to_wait, rpc)
         print("[CLIENT] Tx confirmed. Sending proof to worker...")
 
-    # 5) Resubmit with payment proof
+    # 5) Resubmit with payment proof — worker verifies payment then runs the job (OpenClaw). This request
+    #    blocks until the worker returns the result, so timeout must allow for slow jobs (default 5 min).
+    job_result_timeout = 300
+    _env = os.getenv("AGENTPAY_JOB_RESULT_TIMEOUT", "").strip()
+    if _env.isdigit():
+        job_result_timeout = int(_env)
     resubmit_headers = {**headers, "X-Payment": proof}
-    r2 = requests.post(worker_endpoint, json=payload, headers=resubmit_headers, timeout=90)
+    r2 = requests.post(worker_endpoint, json=payload, headers=resubmit_headers, timeout=job_result_timeout)
     if r2.status_code != 200:
         return JobResult(
             status="error",

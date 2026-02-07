@@ -7,10 +7,27 @@ Client: sees accepts, looks up offer by thread_id, calls trigger_hire_from_accep
 """
 
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import feed_client
 from .trigger_agentpay import trigger_hire_from_accept
+
+
+def _ens_from_env_file() -> str:
+    """Read AGENTPAY_ENS_NAME from .env so we avoid shell truncation (e.g. 13-char export limit)."""
+    path = Path.cwd() / ".env"
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("AGENTPAY_ENS_NAME="):
+                val = line.split("=", 1)[1].strip().strip("'\"")
+                return val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
+    except Exception:
+        pass
+    return ""
 
 
 def format_offer_text(
@@ -54,7 +71,8 @@ def build_demo_config(
     initial_offer: If role=client, optional dict { task_type, price?, input_data?, poster_ens? }.
       When provided, we post this offer once before the loop and store it so we can trigger hire later.
     """
-    raw = (my_ens or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth").replace("\r", "").replace("\n", "").strip()
+    # Prefer .env file so ENS is not truncated by shell (e.g. export 13-char limit)
+    raw = (my_ens or _ens_from_env_file() or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth").replace("\r", "").replace("\n", "").strip()
     my_ens = raw
     if role == "worker" and not my_ens:
         my_ens = "worker"
@@ -92,7 +110,9 @@ def build_demo_config(
         }
         return config
 
-    # client
+    # client — track whether hire actually completed (for autonomous_client exit message)
+    hire_result: Dict[str, Any] = {"completed": False, "error": None}
+
     def on_accept(a: Dict[str, Any]) -> None:
         item = a.get("_item") or {}
         thread_id = item.get("thread_id") or item.get("id")
@@ -105,12 +125,19 @@ def build_demo_config(
         input_data = ctx.get("input_data") or {"query": "Demo task"}
         try:
             result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
-            if result and getattr(result, "status", None) != "completed":
+            if result and getattr(result, "status", None) == "completed":
+                hire_result["completed"] = True
+                hire_result["error"] = None
+            else:
                 err = getattr(result, "error", None) or str(result)
+                hire_result["completed"] = False
+                hire_result["error"] = err
                 print(f"[CLIENT] Hire failed: {err}")
                 if "ENS lookup failed" in str(err) or "no agent info" in str(err).lower():
                     print("[CLIENT] Tip: Accept had wrong ENS (e.g. truncated). Worker must post correct ENS; check AGENTPAY_ENS_NAME in worker .env.")
         except Exception as e:
+            hire_result["completed"] = False
+            hire_result["error"] = str(e)
             print(f"[CLIENT] Hire error: {e}")
 
     def on_offer(_: Dict[str, Any]) -> None:
@@ -121,6 +148,7 @@ def build_demo_config(
         "on_offer": on_offer,
         "on_accept": on_accept,
         "poll_interval_seconds": poll_interval_seconds,
+        "_hire_result": hire_result,
     }
 
     if initial_offer and offer_store is not None:

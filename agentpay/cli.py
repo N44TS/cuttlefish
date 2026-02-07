@@ -31,9 +31,6 @@ def _ens_name_from_env_file(env_path: Optional[Path] = None) -> str:
             if line.startswith("AGENTPAY_ENS_NAME="):
                 val = line.split("=", 1)[1].strip().strip('"\'')
                 val = val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
-                # Common truncation: democuttlefis (missing final 'h')
-                if val == "democuttlefis":
-                    val = "democuttlefish"
                 return val
     except Exception:
         pass
@@ -550,7 +547,12 @@ def autonomous_client_command():
     config["exit_after_first_accept"] = True
     print("Autonomous client: posting one offer (medical article summary), watching for one accept, then hiring and exiting...")
     run_autonomous_agent(config)
-    print("\n✅ Client finished: one job posted, one hire completed, exiting.")
+    hire_result = config.get("_hire_result") or {}
+    if hire_result.get("completed"):
+        print("\n✅ Client finished: one job posted, one hire completed, exiting.")
+    else:
+        err = hire_result.get("error") or "hire did not complete"
+        print(f"\n⚠️ Client finished: job posted and accept seen, but hire did not complete: {err}")
 
 
 def main():

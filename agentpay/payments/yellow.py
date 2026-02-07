@@ -99,7 +99,10 @@ def _call_bridge(command: dict, timeout: int = 35) -> dict:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse bridge response: {e}. Output: {result.stdout}")
     except subprocess.TimeoutExpired as e:
-        err = f"Bridge timeout after {timeout}s. The channel path needs ensureChannel (~90s) + transferAndClose (~120s)."
+        err = (
+            f"Bridge timeout after {timeout}s. "
+            "On slow RPCs increase timeouts: AGENTPAY_BRIDGE_TIMEOUT_CREATE, AGENTPAY_BRIDGE_TIMEOUT_TRANSFER, AGENTPAY_BRIDGE_TIMEOUT_CLOSE (seconds)."
+        )
         if e.stderr:
             err += f" Bridge stderr: {e.stderr[:500]}"
         raise RuntimeError(err)
@@ -324,23 +327,36 @@ def pay_yellow_chunked_full(
     return f"yellow_chunked_full|{session_id}|{version}|{tx_hash}"
 
 
+def _bridge_timeout(name: str, default: int) -> int:
+    """Bridge step timeout in seconds; override via AGENTPAY_BRIDGE_TIMEOUT_<name>."""
+    key = f"AGENTPAY_BRIDGE_TIMEOUT_{name}"
+    val = os.getenv(key, "").strip()
+    if val.isdigit():
+        return int(val)
+    return default
+
+
 def pay_yellow_channel(bill: Bill, wallet: AgentWallet, worker_endpoint: Optional[str] = None, **kwargs: object) -> str:
     """
     Pay via Yellow channel path as three separate steps (4a → 4c → 4d):
     open channel (if needed), transfer to worker, close channel.
     Returns close_tx_hash (on-chain, visible on Sepolia Etherscan).
-    Each step has its own timeout so slow RPCs don't fail the whole flow.
+    Each step has its own timeout; on slow RPCs set AGENTPAY_BRIDGE_TIMEOUT_CREATE,
+    AGENTPAY_BRIDGE_TIMEOUT_TRANSFER, AGENTPAY_BRIDGE_TIMEOUT_CLOSE (seconds).
     Client needs ytest.usd in unified balance (faucet) and a little Sepolia ETH for gas.
     """
     if not hasattr(wallet, "account"):
         raise ValueError("Wallet must have an account for Yellow channel payments")
+    t_create = _bridge_timeout("CREATE", 120)
+    t_transfer = _bridge_timeout("TRANSFER", 90)
+    t_close = _bridge_timeout("CLOSE", 120)
     try:
         print("[CLIENT] Opening channel (step 4a)...", flush=True)
-        create_channel(wallet, timeout=90)
+        create_channel(wallet, timeout=t_create)
         print("[CLIENT] Transferring to worker (step 4c)...", flush=True)
-        channel_transfer(wallet, bill.recipient, amount=bill.amount, timeout=60)
+        channel_transfer(wallet, bill.recipient, amount=bill.amount, timeout=t_transfer)
         print("[CLIENT] Closing channel (step 4d)...", flush=True)
-        tx_hash = close_channel(wallet, timeout=90)
+        tx_hash = close_channel(wallet, timeout=t_close)
     except RuntimeError as e:
         raise RuntimeError(
             f"{e}. "
@@ -438,16 +454,18 @@ def create_channel(wallet: AgentWallet, timeout: int = 70) -> dict:
     return {"channel_id": data.get("channel_id"), "tx_hash": data.get("tx_hash")}
 
 
-def ensure_worker_channel(worker_private_key: str, timeout: int = 70) -> dict:
+def ensure_worker_channel(worker_private_key: str, timeout: Optional[int] = None) -> dict:
     """
     Lock (on-chain): Ensure the worker has a channel so both bots have locked.
     Call from worker process at startup when using session payment.
+    Uses AGENTPAY_BRIDGE_TIMEOUT_CREATE (default 120s) when timeout is not passed.
     """
     pk = worker_private_key.strip()
     if not pk.startswith("0x"):
         pk = "0x" + pk
     worker_wallet = AgentWallet.from_key(pk)
-    return create_channel(worker_wallet, timeout=timeout)
+    t = timeout if timeout is not None else _bridge_timeout("CREATE", 120)
+    return create_channel(worker_wallet, timeout=t)
 
 
 def steps_1_to_3(wallet: AgentWallet, timeout: int = 25) -> list[dict]:
