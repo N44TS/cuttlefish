@@ -104,6 +104,36 @@ def setup_command():
         print(f"   Endpoint: {endpoint}")
         if saved_env:
             print(f"\n   💾 Saved credentials to .env in this directory (key + ENS name). Do not commit .env.")
+        # Yellow bridge: required for payments to work; do it as part of setup
+        _pkg_dir = Path(__file__).resolve().parent
+        _repo_root = _pkg_dir.parent
+        _yellow_dir = _repo_root / "yellow_test"
+        _bridge_ts = _yellow_dir / "bridge.ts"
+        _node_modules = _yellow_dir / "node_modules"
+        if _bridge_ts.exists() and not _node_modules.exists():
+            print("\n" + "="*70)
+            print("📦 YELLOW PAYMENT BRIDGE (required for pay/receive)")
+            print("="*70)
+            print("Installing Node dependencies for the payment bridge...")
+            import subprocess
+            try:
+                subprocess.run(
+                    ["npm", "install"],
+                    cwd=_yellow_dir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                print("✅ Yellow bridge deps installed.")
+            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+                print(f"⚠️  Could not run npm install: {e}")
+                print(f"\nYou must run this before payments will work:")
+                print(f"  cd {_yellow_dir}")
+                print(f"  npm install")
+                input("Press Enter after you have run the above, or Enter to continue anyway...")
+        elif _bridge_ts.exists():
+            print("\n✅ Yellow bridge ready (node_modules present).")
         print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print(f"YOU CAN DO BOTH — receive work and give work (same wallet)")
         print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -216,7 +246,7 @@ def worker_command():
     if ens_name:
         print(f"\n📝 Checking ENS setup for {ens_name}.eth...")
         try:
-            info = get_agent_info(f"{ens_name}.eth", network="sepolia")
+            info = get_agent_info(f"{ens_name}.eth", mainnet=False)
             endpoint = info.get("endpoint") if info else None
             
             if not endpoint:
@@ -249,20 +279,31 @@ def worker_command():
     print(f"   Wallet: {worker_address}")
     if ens_name:
         print(f"   ENS: {ens_name}.eth")
-    print(f"   Payment method: {os.getenv('AGENTPAY_PAYMENT_METHOD', 'yellow_chunked_full')}")
+    pay_method = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_chunked_full")
+    print(f"   Payment method: {pay_method}")
     print(f"   Port: {os.getenv('PORT', os.getenv('AGENTPAY_PORT', '8000'))}")
+    # Yellow payments need the bridge; ensure node_modules exists so clients can pay
+    if "yellow" in (pay_method or "").lower():
+        _pkg_dir_pre = Path(__file__).resolve().parent
+        _root_pre = _pkg_dir_pre.parent
+        _yellow_dir = _root_pre / "yellow_test"
+        _bridge_ts = _yellow_dir / "bridge.ts"
+        _node_modules = _yellow_dir / "node_modules"
+        if _bridge_ts.exists() and not _node_modules.exists():
+            print("\n⚠️  Yellow bridge needs Node deps. Before a client can pay you, run:")
+            print(f"     cd {_yellow_dir} && npm install")
+            print()
     print("\n✅ Worker is ready! Waiting for jobs...\n")
     
     # Import and run worker server
-    # Ensure repo root is in path (worker_server.py needs this)
-    _root = Path(__file__).resolve().parent.parent.parent
+    # agentpay/cli.py -> parent = agentpay pkg dir, so examples live at agentpay/examples/
+    _pkg_dir = Path(__file__).resolve().parent
+    _root = _pkg_dir.parent  # repo root (for sys.path)
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
     
-    # Import worker server app
-    # worker_server.py adds repo root to path, so import it directly
-    examples_path = Path(__file__).resolve().parent.parent / "examples"
-    worker_server_file = examples_path / "worker_server.py"
+    # Worker script lives inside the agentpay package: agentpay/examples/worker_server.py
+    worker_server_file = _pkg_dir / "examples" / "worker_server.py"
     
     # Read and exec the worker_server.py to get the app
     # This ensures the path setup in worker_server.py runs
