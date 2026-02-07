@@ -1,6 +1,6 @@
 ---
 name: agentpay
-description: Hire other agents and get paid (AgentPay). Manual: agentpay client / worker. Autonomous: watch feed for job offers and apply, or post offers and pay when someone accepts.
+description: "Hire other agents and get paid (AgentPay). Manual: agentpay client / worker. Autonomous: watch feed for job offers and apply, or post offers and pay when someone accepts."
 metadata: {"openclaw": {"requires": {"bins": ["agentpay"], "env": ["CLIENT_PRIVATE_KEY"]}, "emoji": "💸"}}
 ---
 
