@@ -31,6 +31,9 @@ def _ens_name_from_env_file(env_path: Optional[Path] = None) -> str:
             if line.startswith("AGENTPAY_ENS_NAME="):
                 val = line.split("=", 1)[1].strip().strip('"\'')
                 val = val.replace("\r", "").replace("\n", "").strip().removesuffix(".eth")
+                # Common truncation: democuttlefis (missing final 'h')
+                if val == "democuttlefis":
+                    val = "democuttlefish"
                 return val
     except Exception:
         pass
@@ -310,7 +313,12 @@ def worker_command():
         if not yellow_ok:
             print(f"   ytest.usd: request from Yellow faucet for {worker_address}")
         input("\nPress Enter after funding, or Ctrl+C to exit...")
-    
+        # Re-check so we show current balance (Yellow may have been temporarily unavailable)
+        eth_balance, eth_ok = check_eth_balance(wallet)
+        yellow_balance, yellow_ok = check_yellow_balance(wallet)
+        if yellow_balance is not None or eth_ok:
+            print(f"   Balance now: {eth_balance:.4f} ETH" + (f", {yellow_balance:.2f} ytest.usd" if yellow_balance is not None else ""))
+
     # Step 3: Check ENS registration
     ens_name = os.getenv("AGENTPAY_ENS_NAME", "").strip().removesuffix(".eth")
     if not ens_name:

@@ -71,8 +71,8 @@ def check_yellow_balance(wallet: AgentWallet) -> Tuple[Optional[float], bool]:
                 return amount_usd, has_sufficient
         return 0.0, False
     except Exception:
-        # Bridge unavailable, network error, etc. - can't check
-        return None, False
+        # Bridge unavailable, network error, etc. - can't check; don't block worker startup
+        return None, True
 
 
 def request_sepolia_eth(address: str) -> Tuple[bool, str]:
