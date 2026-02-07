@@ -303,7 +303,10 @@ def worker_command():
             print("\n⚠️  Yellow bridge needs Node deps. Before a client can pay you, run:")
             print(f"     cd {_yellow_dir} && npm install")
             print()
-    print("\n✅ Worker is ready! Waiting for jobs...\n")
+    balance_line = f"   Balance: {eth_balance:.4f} ETH" + (f", {yellow_balance:.2f} ytest.usd" if yellow_balance is not None else "")
+    print("\n✅ Worker is ready! Waiting for jobs...")
+    print(balance_line)
+    print()
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("NEXT STEP — Send a job from another terminal (client)")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -384,6 +387,72 @@ def client_command():
     print("=" * 70)
 
 
+def demo_feed_command():
+    """Start the demo feed server so two Moltbots can share offers/accepts (no Moltbook API key)."""
+    _load_dotenv()
+    import sys
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    from autonomous_adapter.demo_feed_server import main as serve_feed
+    print("Starting demo feed (use AGENTPAY_DEMO_FEED_URL in both Moltbots to point here).")
+    serve_feed()
+
+
+def autonomous_worker_command():
+    """Start worker server + autonomous loop: watch feed, reply to offers with ENS."""
+    _load_dotenv()
+    import threading
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    try:
+        from autonomous_adapter import run_autonomous_agent, build_demo_config
+    except ImportError as e:
+        print("autonomous_adapter required. Run from repo root: pip install -e .")
+        sys.exit(1)
+    ens_name = os.getenv("AGENTPAY_ENS_NAME", "").strip().removesuffix(".eth")
+    if not ens_name:
+        ens_name = "worker"
+    config = build_demo_config("worker", my_ens=ens_name, poll_interval_seconds=20)
+    daemon = threading.Thread(target=run_autonomous_agent, args=(config,), daemon=True)
+    daemon.start()
+    print("Autonomous mode: worker server + background feed watcher.")
+    print("When an offer appears on the feed (AGENTPAY_DEMO_FEED_URL), this agent will reply with your ENS and get hired. No feed = same as 'agentpay worker' until a feed is running.")
+    print("Starting worker server...")
+    worker_command()
+
+
+def autonomous_client_command():
+    """Run autonomous client loop: post one offer, watch for accepts, trigger AgentPay hire."""
+    _load_dotenv()
+    from pathlib import Path
+    _root = Path(__file__).resolve().parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
+        print("CLIENT_PRIVATE_KEY required for client (payer). Set in .env or export.")
+        sys.exit(1)
+    try:
+        from autonomous_adapter import run_autonomous_agent, build_demo_config
+    except ImportError as e:
+        print("autonomous_adapter required. Run from repo root: pip install -e .")
+        sys.exit(1)
+    url = os.getenv("AGENTPAY_DEMO_FEED_URL", "").strip()
+    if not url:
+        print("Set AGENTPAY_DEMO_FEED_URL to the demo feed URL (e.g. http://localhost:8765)")
+        print("Start the feed with: agentpay demo-feed")
+        sys.exit(1)
+    ens_name = os.getenv("AGENTPAY_ENS_NAME", "client").strip().removesuffix(".eth")
+    offer_store = {}
+    initial = {"task_type": "analyze-data", "price": "0.05 AP", "input_data": {"query": "Demo task"}, "poster_ens": ens_name}
+    config = build_demo_config("client", my_ens=ens_name, offer_store=offer_store, poll_interval_seconds=20, initial_offer=initial)
+    print("Autonomous client: posted initial offer, watching for accepts...")
+    run_autonomous_agent(config)
+
+
 def main():
     """CLI entry point."""
     _load_dotenv()
@@ -393,6 +462,9 @@ def main():
         print("  agentpay setup    — Interactive setup: generate wallet, register ENS")
         print("  agentpay worker   — Start worker server with setup checks")
         print("  agentpay client   — Send a job and pay a worker (e.g. agentpay client worker.eth)")
+        print("  agentpay demo-feed       — Start demo feed server (for autonomous demo)")
+        print("  agentpay autonomous-worker — Worker + watch feed, reply to offers")
+        print("  agentpay autonomous-client — Client: post offer, watch for accepts, pay")
         print("\nExamples:")
         print("  agentpay setup")
         print("  agentpay worker")
@@ -407,9 +479,15 @@ def main():
         worker_command()
     elif command == "client":
         client_command()
+    elif command == "demo-feed":
+        demo_feed_command()
+    elif command == "autonomous-worker":
+        autonomous_worker_command()
+    elif command == "autonomous-client":
+        autonomous_client_command()
     else:
         print(f"Unknown command: {command}")
-        print("Use 'agentpay setup', 'agentpay worker', or 'agentpay client <worker.eth>'")
+        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client'")
         sys.exit(1)
 
 

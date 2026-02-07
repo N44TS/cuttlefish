@@ -16,6 +16,7 @@ __version__ = "0.1.0"
 from agentpay.schema import Job, Bill, JobResult
 from agentpay.wallet import AgentWallet
 from agentpay.flow import request_job, request_job_by_ens, hire_agent
+from agentpay.tools import pay_agent
 from agentpay.ens2 import (
     discover_agents,
     get_agent_info,
@@ -30,6 +31,11 @@ from agentpay.ens2 import (
 )
 from agentpay.faucet import ensure_funded, check_eth_balance, check_yellow_balance, prompt_funding_choice
 
+try:
+    from autonomous_adapter import run_autonomous_agent
+except ImportError:
+    run_autonomous_agent = None  # optional: install with repo or autonomous_adapter package
+
 __all__ = [
     "__version__",
     "Job",
@@ -39,6 +45,7 @@ __all__ = [
     "request_job",
     "request_job_by_ens",
     "hire_agent",
+    "pay_agent",
     "discover_agents",
     "get_agent_info",
     "get_agent_provisioning_from_env",
@@ -53,4 +60,5 @@ __all__ = [
     "check_eth_balance",
     "check_yellow_balance",
     "prompt_funding_choice",
+    "run_autonomous_agent",
 ]
