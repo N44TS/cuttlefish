@@ -66,13 +66,19 @@ def build_demo_config(
         return feed_client.get_recent_posts()
 
     if role == "worker":
+        replied_offer_ids: set = set()  # post accept only once per offer
+
         def on_offer(o: Dict[str, Any]) -> None:
             item = o.get("_item") or {}
             thread_id = item.get("thread_id") or item.get("id")
             if not thread_id:
                 return
+            tid = str(thread_id)
+            if tid in replied_offer_ids:
+                return
+            replied_offer_ids.add(tid)
             text = f"[AGENTPAY_ACCEPT]\nens: {ens_suffix}"
-            feed_client.post_reply(str(thread_id), text)
+            feed_client.post_reply(tid, text)
 
         def on_accept(_: Dict[str, Any]) -> None:
             pass

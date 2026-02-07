@@ -49,9 +49,10 @@ def run_autonomous_agent(config: Dict[str, Any]) -> None:
     should_stop = None
     if exit_after_first_accept:
         done = [False]
+        _original_on_accept = on_accept
 
         def _on_accept_wrapper(accept: dict) -> None:
-            on_accept(accept)
+            _original_on_accept(accept)
             done[0] = True
 
         on_accept = _on_accept_wrapper
