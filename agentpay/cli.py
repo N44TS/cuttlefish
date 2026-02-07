@@ -3,12 +3,21 @@ AgentPay CLI — Interactive commands for setting up and running agents.
 
 Commands:
   agentpay setup    — Interactive setup: generate wallet, register ENS, provision endpoint
-  agentpay worker   — Start worker server with interactive setup checks
+  agentpay worker   — Start worker server with setup checks
+  agentpay client   — Send a job and pay a worker (no exports if .env present)
 """
 import os
 import sys
 from pathlib import Path
 from typing import Optional
+
+def _load_dotenv():
+    """Load .env from cwd so setup/worker/client use it without manual exports."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path.cwd() / ".env", override=False)
+    except ImportError:
+        pass
 
 def setup_command():
     """Interactive setup: generate wallet, register ENS, provision endpoint."""
@@ -138,20 +147,21 @@ def setup_command():
         print(f"YOU CAN DO BOTH — receive work and give work (same wallet)")
         print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         if saved_env:
-            print(f"\n► To start receiving work (get hired): run this from the same directory:")
+            print(f"\n► To start receiving work (get hired): run from this directory:")
             print(f"  agentpay worker")
-            print(f"\n► To give work (hire another agent): run this, replacing otherbot.eth with their ENS name:")
-            print(f"  WORKER_ENS_NAME=otherbot.eth python agentpay/examples/moltbot_demo.py")
+            print(f"\n► To give work (hire another agent): in a new terminal, set the payer's key then:")
+            print(f"  export CLIENT_PRIVATE_KEY=0x...   # payer's key (must be different from worker's key!)")
+            print(f"  agentpay client otherbot.eth")
         else:
             print(f"\n► To receive work:")
             print(f"  export CLIENT_PRIVATE_KEY={pk_hex}")
             print(f"  export AGENTPAY_ENS_NAME={result}")
             print(f"  agentpay worker")
             print(f"\n► To give work (hire another agent):")
-            print(f"  export CLIENT_PRIVATE_KEY={pk_hex}")
-            print(f"  WORKER_ENS_NAME=otherbot.eth python agentpay/examples/moltbot_demo.py")
+            print(f"  export CLIENT_PRIVATE_KEY=0x...   # payer's key")
+            print(f"  agentpay client otherbot.eth")
         if saved_env:
-            print(f"\n  Run from this directory so .env is loaded; no need to copy the key.")
+            print(f"\n  Run worker from this directory so .env is loaded.")
     else:
         print(f"\n❌ Failed: {result}")
         print(f"\n💡 You can retry with:")
@@ -294,6 +304,16 @@ def worker_command():
             print(f"     cd {_yellow_dir} && npm install")
             print()
     print("\n✅ Worker is ready! Waiting for jobs...\n")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("NEXT STEP — Send a job from another terminal (client)")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print("1. Open a NEW terminal (keep this worker running).")
+    print("2. Export the PAYER's key (the client who pays — must be a different address to workers):")
+    print("   export CLIENT_PRIVATE_KEY=0x...")
+    print(f"3. Run:")
+    _ens = f"{ens_name}.eth" if ens_name else "worker.eth"
+    print(f"   agentpay client {_ens}")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
     
     # Import and run worker server
     # agentpay/cli.py -> parent = agentpay pkg dir, so examples live at agentpay/examples/
@@ -319,16 +339,61 @@ def worker_command():
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
+def client_command():
+    """Send a job and pay a worker (hire an agent). Loads .env from cwd; worker ENS from arg or env."""
+    _load_dotenv()
+    worker_ens = (sys.argv[2] if len(sys.argv) > 2 else os.getenv("WORKER_ENS_NAME", "")).strip().removesuffix(".eth")
+    if worker_ens:
+        worker_ens = f"{worker_ens}.eth" if not worker_ens.endswith(".eth") else worker_ens
+    if not worker_ens:
+        print("Usage: agentpay client <worker.eth>")
+        print("  Example: agentpay client finaltestcuttlepls.eth")
+        print("  Or set WORKER_ENS_NAME in .env and run: agentpay client")
+        sys.exit(1)
+    if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
+        print("❌ No CLIENT_PRIVATE_KEY. Run from the directory where you ran 'agentpay setup' (so .env is loaded), or export CLIENT_PRIVATE_KEY=0x...")
+        sys.exit(1)
+    from agentpay import AgentWallet, hire_agent
+    from agentpay.payments import get_pay_fn
+    print("=" * 70)
+    print("AgentPay Client — Hiring agent via ENS")
+    print("=" * 70)
+    print(f"  Worker: {worker_ens}")
+    wallet = AgentWallet()
+    print(f"  Payer:  {wallet.address}\n")
+    result = hire_agent(
+        wallet,
+        task_type="analyze-data",
+        input_data={"query": "Summarize this for the demo"},
+        worker_ens_name=worker_ens,
+        job_id="agentpay_client_001",
+        pay_fn=get_pay_fn("yellow_chunked_full"),
+    )
+    print("\n" + "=" * 70)
+    if result.status == "completed":
+        print("✅ Result:", result.result or "(ok)")
+        tx = getattr(result, "payment_tx_hash", None)
+        if tx:
+            print(f"   Tx: https://sepolia.etherscan.io/tx/{tx}")
+    else:
+        print("❌ Failed:", result.error or result.status)
+        sys.exit(1)
+    print("=" * 70)
+
+
 def main():
     """CLI entry point."""
+    _load_dotenv()
     if len(sys.argv) < 2:
         print("AgentPay CLI")
         print("\nCommands:")
         print("  agentpay setup    — Interactive setup: generate wallet, register ENS")
         print("  agentpay worker   — Start worker server with setup checks")
+        print("  agentpay client   — Send a job and pay a worker (e.g. agentpay client worker.eth)")
         print("\nExamples:")
         print("  agentpay setup")
         print("  agentpay worker")
+        print("  agentpay client finaltestcuttlepls.eth")
         sys.exit(1)
     
     command = sys.argv[1]
@@ -337,9 +402,11 @@ def main():
         setup_command()
     elif command == "worker":
         worker_command()
+    elif command == "client":
+        client_command()
     else:
         print(f"Unknown command: {command}")
-        print("Use 'agentpay setup' or 'agentpay worker'")
+        print("Use 'agentpay setup', 'agentpay worker', or 'agentpay client <worker.eth>'")
         sys.exit(1)
 
 
