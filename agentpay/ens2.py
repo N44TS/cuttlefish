@@ -609,12 +609,17 @@ def discover_agents(
     In production you'd use a subgraph or indexer; here we check known_agents.
     """
     out = []
+    want = capability.strip().lower()
     for ens_name in known_agents:
         info = get_agent_info(ens_name, rpc_url=rpc_url, mainnet=mainnet)
         if not info:
             continue
-        caps = [c.strip().lower() for c in info["capabilities"].split(",")]
-        if capability.lower() in caps:
+        caps = [c.strip().lower() for c in (info.get("capabilities") or "").split(",") if c.strip()]
+        if want in caps:
+            out.append(info)
+            continue
+        # Flexible: e.g. "summarize" matches ENS "summarize medical articles"
+        if any(want in cap or cap.startswith(want) for cap in caps):
             out.append(info)
     return out
 

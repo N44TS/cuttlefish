@@ -129,10 +129,13 @@ def build_demo_config(
             # Optional: hire by capability (demo) — set AGENTPAY_HIRE_BY_CAPABILITY=1 and AGENTPAY_KNOWN_AGENTS=ens.eth
             known_agents_raw = (os.getenv("AGENTPAY_KNOWN_AGENTS") or "").strip()
             if os.getenv("AGENTPAY_HIRE_BY_CAPABILITY") and known_agents_raw:
-                known_agents = [(n.strip() if n.strip().endswith(".eth") else n.strip() + ".eth") for n in known_agents_raw.split(",") if n.strip()]
+                # Normalize ENS: avoid double .eth (e.g. democuttlefish.eth.eth -> democuttlefish.eth)
+                known_agents = [(n.strip().removesuffix(".eth").strip() + ".eth") for n in known_agents_raw.split(",") if n.strip()]
                 if known_agents:
-                    print(f"[CLIENT] Hiring by capability '{task_type}' (known_agents: {known_agents})")
-                    result = trigger_hire_by_capability(task_type, known_agents, task_type, input_data)
+                    # Discovery: use first word of task_type so "summarize article" matches ENS "summarize" or "summarize medical articles"
+                    cap_for_discovery = (task_type.split() or ["analyze-data"])[0].lower()
+                    print(f"[CLIENT] Hiring by capability '{cap_for_discovery}' (known_agents: {known_agents})")
+                    result = trigger_hire_by_capability(cap_for_discovery, known_agents, task_type, input_data)
                 else:
                     result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
             else:
