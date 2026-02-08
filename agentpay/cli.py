@@ -536,8 +536,12 @@ def autonomous_client_command():
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
     if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
-        print("CLIENT_PRIVATE_KEY required for client (payer). Set in .env or export.")
+        print("CLIENT_PRIVATE_KEY required for client (payer). Put it in .env (no need to export in terminal).")
         sys.exit(1)
+    # Remind: use .env so keys never appear in terminal
+    _env_file = Path.cwd() / ".env"
+    if _env_file.exists():
+        print("Using .env for keys (no export needed).")
     # Only warn if both keys are in env and they're the same address
     try:
         from eth_account import Account
@@ -610,6 +614,9 @@ def autonomous_client_command():
             else:
                 print(outcome)
             print("---")
+        print("")
+        print("[CLIENT] Dispute: if you had refused to pay, worker could run: agentpay adjudicator submit-dispute")
+        print("[CLIENT] Attest: to put this job on-chain, set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) or run agentpay attest when available.")
     else:
         err = hire_result.get("error") or "hire did not complete"
         print(f"\n⚠️ Client finished: job posted and accept seen, but hire did not complete: {err}")
@@ -674,6 +681,23 @@ def adjudicator_info_command():
     print("  Infra: present. Production: wire contract call (currently demo auto-release).")
 
 
+def adjudicator_submit_dispute_command():
+    """Worker runs this when client refused to sign; submits dispute (demo: auto-release)."""
+    try:
+        from agentpay.adjudicator import submit_dispute
+    except ImportError as e:
+        print(f"Adjudicator: not available ({e})")
+        return
+    # Demo: use placeholder session/proof; in production worker would pass real values from last signed state
+    session_id = (len(sys.argv) > 3 and sys.argv[3].strip()) or "0x_session_placeholder"
+    state_proof = (len(sys.argv) > 4 and sys.argv[4].strip()) or "yellow_chunked|0x_placeholder|2"
+    ok = submit_dispute(session_id, state_proof, proof_of_delivery="job_completed", auto_release_demo=True)
+    if ok:
+        print("Dispute submitted (demo: auto-release). In production, worker passes real session_id and state_proof from last signed state.")
+    else:
+        print("Dispute submission failed.")
+
+
 def main():
     """CLI entry point."""
     _load_dotenv()
@@ -686,7 +710,8 @@ def main():
         print("  agentpay demo-feed       — Start demo feed server (for autonomous demo)")
         print("  agentpay autonomous-worker — Worker + watch feed, reply to offers")
         print("  agentpay autonomous-client — Client: post offer, watch for accepts, pay")
-        print("  agentpay adjudicator-info — Show dispute-resolution infra (stub)")
+        print("  agentpay adjudicator [info] — Show dispute-resolution infra")
+        print("  agentpay adjudicator submit-dispute — Worker: submit dispute (demo)")
         print("  agentpay install-skill — Install AgentPay skill into OpenClaw (so the bot sees it)")
         print("\nExamples:")
         print("  agentpay setup")
@@ -709,6 +734,10 @@ def main():
     elif command == "autonomous-client":
         autonomous_client_command()
     elif command == "adjudicator-info":
+        adjudicator_info_command()
+    elif command == "adjudicator" and len(sys.argv) > 2 and sys.argv[2] == "submit-dispute":
+        adjudicator_submit_dispute_command()
+    elif command == "adjudicator":
         adjudicator_info_command()
     elif command == "install-skill":
         install_skill_command()

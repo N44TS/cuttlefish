@@ -141,7 +141,6 @@ def request_job(
 
     if result.status == "completed":
         print(f"[CLIENT] Settlement complete. Worker received payment — check worker terminal for balance after.")
-        print("[CLIENT] Adjudicator: dispute path available (worker can submit last signed state if client refused).", flush=True)
 
     # 5b) Attach session_id or tx hash for client to use
     if proof:
@@ -184,7 +183,7 @@ def request_job(
             except Exception:
                 pass  # Don't fail the job if session close fails (e.g. quorum-2 sandbox limitation).
 
-    # 6) Optional: requester creates EAS review (recipient = worker; requester pays gas)
+    # 6) Optional: requester creates EAS review (recipient = worker; requester pays gas). No print here — CLI shows CTA at end.
     if create_review and result.status == "completed" and result.worker:
         try:
             from agentpay.eas import create_job_review
@@ -198,36 +197,8 @@ def request_job(
             )
             if review_tx:
                 result.attestation_uid = review_tx
-                print("[CLIENT] EAS attestation submitted (job review on-chain)", flush=True)
-            else:
-                print("[CLIENT] EAS review: skipped (set AGENTPAY_EAS_SCHEMA_UID to enable on-chain attestation)", flush=True)
-        except Exception as e:
-            print(f"[CLIENT] EAS review: skipped ({e})", flush=True)
-    # 7) Adjudicator (demo): show dispute path when we have a session — worker could submit last signed state
-    if result.status == "completed" and proof and getattr(result, "yellow_session_id", None):
-        try:
-            from agentpay.adjudicator import submit_dispute
-            session_id = result.yellow_session_id
-            # Build proof string for dispute (e.g. yellow_chunked|id|version or yellow|id|version)
-            p = proof.strip()
-            if p.startswith("yellow_chunked_full|") and "|" in p:
-                parts = p.split("|")
-                if len(parts) >= 3:
-                    state_proof = f"yellow_chunked|{parts[1]}|{parts[2]}"
-                else:
-                    state_proof = p
-            elif p.startswith("yellow_full|") and "|" in p:
-                parts = p.split("|")
-                if len(parts) >= 3:
-                    state_proof = f"yellow|{parts[1]}|{parts[2]}"
-                else:
-                    state_proof = p
-            else:
-                state_proof = p
-            ok = submit_dispute(session_id, state_proof, proof_of_delivery="job_completed", worker_address=bill.recipient, auto_release_demo=True)
-            print(f"[CLIENT] Adjudicator (demo): dispute path shown — submit_dispute(..., auto_release_demo=True) → {ok} (funds would release to worker if client had refused to sign)", flush=True)
-        except Exception as e:
-            print(f"[CLIENT] Adjudicator (demo): skipped ({e})", flush=True)
+        except Exception:
+            pass
     return result
 
 

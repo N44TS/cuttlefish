@@ -456,12 +456,11 @@ async def submit_job(request: Request):
             print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx}")
     elif p.startswith("0x") and len(p) == 66:
         print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{p}")
-        print("[WORKER] Payment verified.")
-    print("[WORKER] Adjudicator: if client has refused to pay, you can submit last signed state")
+    print("[WORKER] Payment verified.")
     _write_agentpay_status("working", task_type=job.task_type)
     bal_before = _worker_yellow_balance()
     if bal_before is not None:
-        print(f"[WORKER] Balance (after payment, before job): {bal_before}")
+        print(f"[WORKER] Balance (after payment): {bal_before}")
     inp = job.input_data or {}
     query = (inp.get("query") or inp.get("text") or "")
     token = (os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD") or "").strip()
@@ -472,7 +471,6 @@ async def submit_job(request: Request):
         try:
             from agentpay.llm_task import do_task
             result = do_task(job.task_type, inp)
-            print("[WORKER] OpenClaw completed the task.")
         except RuntimeError as e:
             print(f"[WORKER] OpenClaw required but failed: {e}")
             _write_agentpay_status("idle", error=str(e))
@@ -487,10 +485,10 @@ async def submit_job(request: Request):
         print(f"[WORKER] Balance after job: {bal_after}")
     _write_agentpay_status("completed", task_type=job.task_type, balance_after=bal_str)
     print("[WORKER] Done. Returning result.")
-    # for demo so can see the bot's answer in the worker terminal
     if result and isinstance(result, str) and result.strip():
         preview = result.strip()[:300] + ("..." if len(result.strip()) > 300 else "")
         print(f"[WORKER] Result (preview): {preview}")
+    print("[WORKER] Dispute: if client had refused to pay, run: agentpay adjudicator submit-dispute")
     return {
         "status": "completed",
         "result": result,
