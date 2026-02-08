@@ -586,8 +586,9 @@ def install_skill_command():
     except Exception as e:
         print(f"Failed to copy skill: {e}")
         sys.exit(1)
-    # Ensure openclaw.json has skills.entries.agentpay.enabled
+    # Ensure openclaw.json: agentpay enabled AND load skills from this repo (so repo's SKILL.md with always:true is used)
     config_path = Path.home() / ".openclaw" / "openclaw.json"
+    repo_skills_dir = str(skill_src.parent.resolve())  # repo/skills — OpenClaw will load from here
     try:
         if config_path.exists():
             config = json.loads(config_path.read_text())
@@ -599,9 +600,15 @@ def install_skill_command():
         if not isinstance(entries["agentpay"], dict):
             entries["agentpay"] = {}
         entries["agentpay"]["enabled"] = True
+        # Load from repo's skills/ so the bot sees the skill even when gating would fail (e.g. TUI started without .env)
+        load = skills.setdefault("load", {})
+        extra_dirs = list(load.get("extraDirs") or [])
+        if repo_skills_dir not in extra_dirs:
+            extra_dirs.append(repo_skills_dir)
+        load["extraDirs"] = extra_dirs
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, indent=2))
-        print(f"Updated {config_path} (skills.entries.agentpay.enabled = true)")
+        print(f"Updated {config_path} (skills.entries.agentpay.enabled = true, skills.load.extraDirs includes repo skills)")
     except Exception as e:
         print(f"Could not update openclaw.json: {e}. You may need to add agentpay manually (see agentpay/docs/OPENCLAW_SETUP.md).")
     print("\nNext: Run 'openclaw skills list' to verify. Restart the gateway (or start a new chat) so the skill appears.")
