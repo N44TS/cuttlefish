@@ -10,6 +10,7 @@ import sys
 import json
 import time
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -67,16 +68,21 @@ def _print_balance_and_llm_at_startup():
         print("[WORKER] OpenClaw is required. Run 'agentpay setup-openclaw' and start 'openclaw gateway'.")
         sys.exit(1)
     print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
-    # Ensure worker Yellow channel at startup so 402 returns immediately (no 120s block on first job).
+    # Ensure worker Yellow channel in background so server can accept connections immediately.
+    # (Blocking here for up to 120s was preventing the server from listening, causing client "connection refused".)
     if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and WORKER_PRIVATE_KEY:
-        try:
-            from agentpay.payments.yellow import ensure_worker_channel
-            ensure_worker_channel(WORKER_PRIVATE_KEY)
-            _worker_channel_ensured = True
-            print("[WORKER] Yellow worker channel ready (lock step done).")
-        except Exception as e:
-            print("[WORKER] ensure_worker_channel at startup failed:", e)
-            print("[WORKER] First job may fail at payment. Fix bridge/RPC and restart worker.")
+        def _ensure_channel_background():
+            global _worker_channel_ensured
+            try:
+                from agentpay.payments.yellow import ensure_worker_channel
+                ensure_worker_channel(WORKER_PRIVATE_KEY)
+                _worker_channel_ensured = True
+                print("[WORKER] Yellow worker channel ready (lock step done).")
+            except Exception as e:
+                print("[WORKER] ensure_worker_channel in background failed:", e)
+                print("[WORKER] First job may fail at payment. Fix bridge/RPC and retry.")
+        t = threading.Thread(target=_ensure_channel_background, daemon=True)
+        t.start()
 
 SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com")
 # USDC Sepolia
