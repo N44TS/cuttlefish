@@ -556,16 +556,11 @@ def autonomous_client_command():
         pass
     try:
         from autonomous_adapter import run_autonomous_agent, build_demo_config
+        from autonomous_adapter.trigger_agentpay import trigger_hire_by_capability
     except ImportError as e:
         print("autonomous_adapter required. Run from repo root: pip install -e .")
         sys.exit(1)
-    url = os.getenv("AGENTPAY_DEMO_FEED_URL", "").strip()
-    if not url:
-        print("Set AGENTPAY_DEMO_FEED_URL to the demo feed URL (e.g. http://localhost:8765)")
-        print("Start the feed with: agentpay demo-feed")
-        sys.exit(1)
     ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "client").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
-    offer_store = {}
     # One real-looking job: summarize article (~500 words for demo).
     medical_query = (
         "Summarise this medical article in 2-3 sentences:\n\n"
@@ -596,6 +591,50 @@ def autonomous_client_command():
         "input_ref": "Summarise article (see query in job)",
         "poster_ens": ens_name,
     }
+    known_agents_raw = (os.getenv("AGENTPAY_KNOWN_AGENTS") or "").strip()
+    # Capability-only mode: no feed. Client discovers from AGENTPAY_KNOWN_AGENTS and hires directly.
+    if os.getenv("AGENTPAY_HIRE_BY_CAPABILITY") and known_agents_raw:
+        known_agents = [(n.strip().removesuffix(".eth").strip() + ".eth") for n in known_agents_raw.split(",") if n.strip()]
+        if known_agents:
+            task_type = "summarize article"
+            input_data = {"query": medical_query}
+            cap = "summarize"
+            print("Hiring by capability only (no feed). Discovering from AGENTPAY_KNOWN_AGENTS and hiring...")
+            result = trigger_hire_by_capability(cap, known_agents, task_type, input_data)
+            hire_result = {}
+            if result and getattr(result, "status", None) == "completed":
+                hire_result["completed"] = True
+                hire_result["error"] = None
+                hire_result["result"] = getattr(result, "result", None)
+                hire_result["payment_tx_hash"] = getattr(result, "payment_tx_hash", None)
+            else:
+                hire_result["completed"] = False
+                hire_result["error"] = getattr(result, "error", None) if result else "no result"
+                hire_result["result"] = None
+            if hire_result.get("completed"):
+                print("\n✅ Client finished: hired by capability, job completed, exiting.")
+                tx_hash = hire_result.get("payment_tx_hash")
+                if tx_hash and isinstance(tx_hash, str) and tx_hash.startswith("0x"):
+                    print(f"[CLIENT] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx_hash}")
+                outcome = hire_result.get("result")
+                if outcome is not None:
+                    print("\n--- Result from worker (bot's answer) ---")
+                    print(outcome if isinstance(outcome, str) else outcome)
+                    print("---")
+                print("")
+                print("[CLIENT] Dispute: if you had refused to pay, worker could run: agentpay adjudicator submit-dispute")
+                print("[CLIENT] Attest: to put this job on-chain, set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) or run agentpay attest when available.")
+            else:
+                print(f"\n⚠️ Hire by capability failed: {hire_result.get('error')}")
+            return
+    # Feed flow: post offer, wait for accept, then hire (by accept ENS or by capability if set)
+    url = os.getenv("AGENTPAY_DEMO_FEED_URL", "").strip()
+    if not url:
+        print("Set AGENTPAY_DEMO_FEED_URL to the demo feed URL (e.g. http://localhost:8765)")
+        print("Start the feed with: agentpay demo-feed")
+        print("(Or set AGENTPAY_HIRE_BY_CAPABILITY=1 and AGENTPAY_KNOWN_AGENTS=worker.eth to hire by capability without the feed.)")
+        sys.exit(1)
+    offer_store = {}
     config = build_demo_config("client", my_ens=ens_name, offer_store=offer_store, poll_interval_seconds=20, initial_offer=initial)
     config["exit_after_first_accept"] = True
     print("Autonomous client: posting one offer (summarize article), watching for one accept, then hiring and exiting...")
