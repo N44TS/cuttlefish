@@ -598,10 +598,17 @@ def get_agent_info(ens_name: str, rpc_url: Optional[str] = None, mainnet: bool =
 
 
 def _normalize_capability_spelling(s: str) -> str:
-    """British/American: so 'summarise' and 'summarize' match."""
+    """British/American and common typo: summarise/summerise -> summarize."""
     s = s.strip().lower()
-    for british, american in (("summarise", "summarize"), ("summarises", "summarizes"), ("analyse", "analyze"), ("analyses", "analyzes")):
-        s = s.replace(british, american)
+    for variant, canonical in (
+        ("summarise", "summarize"),
+        ("summarises", "summarizes"),
+        ("summerise", "summarize"),
+        ("summerises", "summarizes"),
+        ("analyse", "analyze"),
+        ("analyses", "analyzes"),
+    ):
+        s = s.replace(variant, canonical)
     return s
 
 
@@ -623,13 +630,14 @@ def discover_agents(
         info = get_agent_info(ens_name, rpc_url=rpc_url, mainnet=mainnet)
         if not info:
             continue
-        caps = [c.strip().lower() for c in (info.get("capabilities") or "").split(",") if c.strip()]
+        caps_str = (info.get("capabilities") or "").strip()
+        caps = [c.strip().lower() for c in caps_str.split(",") if c.strip()]
         caps_normalized = [_normalize_capability_spelling(c) for c in caps]
         if want in caps or want in caps_normalized:
             out.append(info)
             continue
         # Flexible: e.g. "summarize" matches ENS "summarise medical articles"
-        if any(want in _normalize_capability_spelling(cap) or _normalize_capability_spelling(cap).startswith(want) for cap in caps):
+        if caps and any(want in _normalize_capability_spelling(cap) or _normalize_capability_spelling(cap).startswith(want) for cap in caps):
             out.append(info)
     return out
 

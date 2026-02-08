@@ -318,7 +318,7 @@ def hire_agent(
         if not matches:
             return JobResult(
                 status="error",
-                error=f"No agent found for capability '{capability}' in known_agents ({len(known_agents)} names)",
+                error=f"No agent found for capability '{capability}' in known_agents ({len(known_agents)} names). Check: ENS name has resolver on Sepolia and agentpay.endpoint (and optionally agentpay.capabilities) set.",
             )
         info = matches[0]
         agent_name = info.get("name") or "unknown"
