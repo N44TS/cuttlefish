@@ -85,15 +85,15 @@ class FeedHandler(BaseHTTPRequestHandler):
         full_text = (data.get("full_text") or "").strip()
         item = {"id": post_id, "text": text, "thread_id": thread_id, "created_at": now}
         FEED.append(item)
-        # Show in feed terminal: full text if short (so ENS never cut), else preview
+        # Show in feed terminal: full text if short (so ENS never cut), else preview. Flush so order is visible.
         one_line = text.replace("\n", " ").strip()
         if len(one_line) <= 250:
-            print(f"[FEED] POST #{post_id}: {one_line}")
+            print(f"[FEED] POST #{post_id}: {one_line}", flush=True)
         else:
             preview = one_line[:200] + "..."
-            print(f"[FEED] POST #{post_id}: {preview}")
+            print(f"[FEED] POST #{post_id}: {preview}", flush=True)
         if full_text:
-            print(f"[FEED] --- Article / input (for this offer) ---\n{full_text}\n[FEED] ---")
+            print(f"[FEED] --- Article / input (for this offer) ---\n{full_text}\n[FEED] ---", flush=True)
         self._send_json(201, item)
 
 

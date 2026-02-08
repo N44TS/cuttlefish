@@ -534,7 +534,13 @@ def autonomous_client_command():
     ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "client").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     offer_store = {}
     # One real-looking job: summarise a medical article (worker does the work and gets paid once)
-    medical_query = "Summarise this medical article in 2-3 sentences: Hypertension affects one in three adults. Key interventions include lifestyle modification (diet, exercise) and antihypertensive therapy. Guidelines recommend regular BP monitoring and stepped care."
+    medical_query = (
+        "Summarise this medical article in 2-3 sentences:\n\n"
+        "Hypertension (high blood pressure) affects approximately one in three adults worldwide and is a major risk factor for cardiovascular disease, stroke, and kidney failure. "
+        "Key interventions include lifestyle modification (reduced sodium intake, weight management, regular exercise, and moderation of alcohol) and antihypertensive drug therapy when needed. "
+        "Clinical guidelines recommend regular BP monitoring, stepped care with combination therapy if targets are not met, and attention to comorbidities such as diabetes and chronic kidney disease. "
+        "Early detection and consistent management significantly reduce the risk of long-term complications."
+    )
     initial = {
         "task_type": "analyze-data",
         "price": "0.05 AP",

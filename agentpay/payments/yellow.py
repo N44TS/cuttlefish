@@ -205,6 +205,7 @@ def pay_yellow_chunked(
 ) -> str:
     """
     Micro-payments (off-chain): chunked signed state updates in one session.
+    Chunking is real: each chunk = one submit_state (bridge) + one worker POST /sign-state; worker signs per chunk.
     Lock → Handshake → for each chunk: client submit_state(cumulative amount), worker sign_state (POST /sign-state) → return final proof.
     worker_base_url or worker_endpoint: worker URL (e.g. "http://localhost:8000" or "http://localhost:8000/submit-job").
     """
@@ -213,11 +214,7 @@ def pay_yellow_chunked(
     private_key = wallet.account.key.hex() if hasattr(wallet, "account") else ""
     if not private_key.startswith("0x"):
         private_key = "0x" + private_key
-    # Lock
-    try:
-        create_channel(wallet, timeout=90)
-    except RuntimeError:
-        pass
+    # Chunked is off-chain only here. Settlement (create_channel → transfer → close) is done in pay_yellow_channel — same code as yellow_full, no pre-step create_channel.
     # Handshake: create session (quorum 2)
     print("[CLIENT] Creating session (handshake)...", flush=True)
     create_cmd = {
@@ -291,25 +288,42 @@ def pay_yellow_full(bill: Bill, wallet: AgentWallet, worker_endpoint: Optional[s
     return f"yellow_full|{session_proof}|{tx_hash}"
 
 
+def _chunk_count_from_env(default: int = 10) -> int:
+    """Number of chunks for chunked flow. AGENTPAY_CHUNKS (e.g. 5 or 10); clamped 2–20."""
+    val = (os.getenv("AGENTPAY_CHUNKS") or "").strip()
+    if val.isdigit():
+        n = int(val)
+        return max(2, min(20, n))
+    return default
+
+
 def pay_yellow_chunked_full(
     bill: Bill,
     wallet: AgentWallet,
     worker_base_url: Optional[str] = None,
-    chunks: int = 10,  # Prize doc: "Repeat 10 times"
+    chunks: Optional[int] = None,  # None = use AGENTPAY_CHUNKS or 10
     worker_endpoint: Optional[str] = None,
     **kwargs: object,
 ) -> str:
     """
     Micro-payments (chunked) THEN on-chain settlement.
-    Prize doc: Worker sends 10% → Client signs "$0.10" → Repeat 10 times → Settlement on-chain.
-    
-    1. Chunked session: create_session → for each chunk (10): submit_state(cumulative) → worker sign_state
+    Prize doc: Worker sends 10% → Client signs "$0.10" → Repeat N times → Settlement on-chain.
+    Chunking is real: each chunk = one submit_state (bridge) + one worker POST /sign-state.
+
+    1. Chunked session: create_session → for each chunk: submit_state(cumulative) → worker sign_state
     2. Channel settlement: create_channel → transfer → close (on-chain tx).
-    
-    Returns: yellow_chunked_full|session_id|version|tx_hash
+
+    Set AGENTPAY_CHUNKS=5 for 5 chunks (default 10). Returns: yellow_chunked_full|session_id|version|tx_hash
     """
-    # Step 1: Chunked micropayments (off-chain)
-    print("[CLIENT] Step 1: Chunked micropayments (off-chain)...", flush=True)
+    if chunks is None:
+        chunks = _chunk_count_from_env(10)
+    # Same as yellow_full: ensure channel exists first (so pay_yellow_channel sees it and does transfer → close only)
+    try:
+        create_channel(wallet, timeout=90)
+    except RuntimeError:
+        pass  # Channel may already exist; continue.
+    # Step 1: Chunked micropayments (off-chain). Chunks add up to bill.amount; settlement transfers that full amount.
+    print(f"[CLIENT] Step 1: Chunked micropayments ({chunks} chunks, off-chain)...", flush=True)
     chunked_proof = pay_yellow_chunked(bill, wallet, worker_base_url, chunks, worker_endpoint, **kwargs)
     # Parse: yellow_chunked|session_id|version
     parts = chunked_proof.split("|")
