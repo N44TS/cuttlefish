@@ -206,6 +206,7 @@ def pay_yellow_chunked(
     """
     Micro-payments (off-chain): chunked signed state updates in one session.
     Chunking is real: each chunk = one submit_state (bridge) + one worker POST /sign-state; worker signs per chunk.
+    Use chunks=1 for a single submit_state (full amount), i.e. amalgamated — one state, one worker sign, then same settlement as yellow_full.
     Lock → Handshake → for each chunk: client submit_state(cumulative amount), worker sign_state (POST /sign-state) → return final proof.
     worker_base_url or worker_endpoint: worker URL (e.g. "http://localhost:8000" or "http://localhost:8000/submit-job").
     """
@@ -288,12 +289,12 @@ def pay_yellow_full(bill: Bill, wallet: AgentWallet, worker_endpoint: Optional[s
     return f"yellow_full|{session_proof}|{tx_hash}"
 
 
-def _chunk_count_from_env(default: int = 10) -> int:
-    """Number of chunks for chunked flow. AGENTPAY_CHUNKS (e.g. 5 or 10); clamped 2–20."""
+def _chunk_count_from_env(default: int = 5) -> int:
+    """Number of chunks for chunked flow. AGENTPAY_CHUNKS (e.g. 1, 5 or 10); clamped 1–20. Use 1 for single submit_state (amalgamated, same as yellow_full)."""
     val = (os.getenv("AGENTPAY_CHUNKS") or "").strip()
     if val.isdigit():
         n = int(val)
-        return max(2, min(20, n))
+        return max(1, min(20, n))
     return default
 
 
@@ -301,7 +302,7 @@ def pay_yellow_chunked_full(
     bill: Bill,
     wallet: AgentWallet,
     worker_base_url: Optional[str] = None,
-    chunks: Optional[int] = None,  # None = use AGENTPAY_CHUNKS or 10
+    chunks: Optional[int] = None,  # None = use AGENTPAY_CHUNKS or 5
     worker_endpoint: Optional[str] = None,
     **kwargs: object,
 ) -> str:
@@ -309,19 +310,22 @@ def pay_yellow_chunked_full(
     Micro-payments (chunked) THEN on-chain settlement.
     Prize doc: Worker sends 10% → Client signs "$0.10" → Repeat N times → Settlement on-chain.
     Chunking is real: each chunk = one submit_state (bridge) + one worker POST /sign-state.
+    Use chunks=1 (or AGENTPAY_CHUNKS=1) for a single submit_state (full amount) — amalgamated, same effective flow as yellow_full.
 
+    0. Open channel first (same as yellow_full; avoids create_channel failing after session).
     1. Chunked session: create_session → for each chunk: submit_state(cumulative) → worker sign_state
-    2. Channel settlement: create_channel → transfer → close (on-chain tx).
-
-    Set AGENTPAY_CHUNKS=5 for 5 chunks (default 10). Returns: yellow_chunked_full|session_id|version|tx_hash
+    2. Channel settlement: transfer → close (channel already open). Returns: yellow_chunked_full|session_id|version|tx_hash
     """
     if chunks is None:
-        chunks = _chunk_count_from_env(10)
-    # Same as yellow_full: ensure channel exists first (so pay_yellow_channel sees it and does transfer → close only)
+        chunks = _chunk_count_from_env(5)
+    # Step 0: Open channel first (same order as yellow_full). Yellow docs: create_channel before session avoids sandbox/state issues.
     try:
-        create_channel(wallet, timeout=90)
-    except RuntimeError:
-        pass  # Channel may already exist; continue.
+        print("[CLIENT] Step 0: Opening channel (before session)...", flush=True)
+        create_channel(wallet, timeout=_bridge_timeout("CREATE", 120))
+        print("[CLIENT] Channel open.", flush=True)
+    except RuntimeError as e:
+        # Channel may already exist
+        print(f"[CLIENT] Step 0: {e}", flush=True)
     # Step 1: Chunked micropayments (off-chain). Chunks add up to bill.amount; settlement transfers that full amount.
     print(f"[CLIENT] Step 1: Chunked micropayments ({chunks} chunks, off-chain)...", flush=True)
     chunked_proof = pay_yellow_chunked(bill, wallet, worker_base_url, chunks, worker_endpoint, **kwargs)
@@ -332,8 +336,13 @@ def pay_yellow_chunked_full(
     session_id = parts[1]
     version = parts[2]
     print(f"[CLIENT] ✅ Step 1 complete: Session {session_id[:18]}... ({chunks} chunks, version {version})", flush=True)
-    
-    # Step 2: On-chain settlement (channel close)
+    # Close app session so wallet isn't in open-session state when we create_channel (sandbox may block channel otherwise)
+    try:
+        close_yellow_session(session_id, wallet, bill.recipient)
+        print("[CLIENT] App session closed.", flush=True)
+    except Exception:
+        pass  # Continue to settlement; bridge may support channel with session open
+    # Step 2: On-chain settlement (channel close) — same as yellow_full
     print("[CLIENT] Step 2: On-chain settlement (channel close)...", flush=True)
     tx_hash = pay_yellow_channel(bill, wallet, worker_endpoint, **kwargs)
     print(f"[CLIENT] ✅ Step 2 complete: Settlement tx {tx_hash[:18]}...", flush=True)
