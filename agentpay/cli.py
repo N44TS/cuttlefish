@@ -562,7 +562,7 @@ def autonomous_client_command():
         sys.exit(1)
     ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "client").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     offer_store = {}
-    # One real-looking job: summarize article (worker does the work and gets paid once). Article is ~2x length for demo.
+    # One real-looking job: summarize article (~500 words for demo).
     medical_query = (
         "Summarise this medical article in 2-3 sentences:\n\n"
         "Hypertension (high blood pressure) affects approximately one in three adults worldwide and is a major risk factor for cardiovascular disease, stroke, and kidney failure. "
@@ -572,7 +572,18 @@ def autonomous_client_command():
         "Population-level strategies include public health campaigns to reduce dietary salt, screening programmes in primary care, and adherence support for prescribed regimens. "
         "Resistant hypertension (uncontrolled despite three or more drugs) may require specialist workup for secondary causes and consideration of device-based therapies. "
         "Blood pressure targets vary by age and comorbidity; recent trials support more intensive targets in many higher-risk patients. "
-        "International guidelines are broadly aligned on the importance of out-of-office monitoring (ambulatory or home) to confirm the diagnosis and guide treatment."
+        "International guidelines are broadly aligned on the importance of out-of-office monitoring (ambulatory or home) to confirm the diagnosis and guide treatment. "
+        "Primary hypertension has no single identifiable cause and is influenced by genetics, diet, physical inactivity, obesity, and stress. "
+        "Secondary hypertension can result from renal artery stenosis, primary aldosteronism, pheochromocytoma, thyroid disorders, or obstructive sleep apnoea; screening is recommended when onset is sudden, severe, or resistant to treatment. "
+        "Lifestyle changes can lower systolic BP by roughly 5–10 mmHg and are first-line for all patients; the DASH diet, weight loss of 5–10% in overweight individuals, and at least 150 minutes of moderate activity per week are commonly recommended. "
+        "First-line drug classes include ACE inhibitors, angiotensin receptor blockers, calcium channel blockers, and thiazide or thiazide-like diuretics; choice depends on age, ethnicity, comorbidities, and tolerability. "
+        "Combination therapy is often needed; single-pill combinations improve adherence. "
+        "Target BP in most adults is below 140/90 mmHg; in those with diabetes, CKD, or high cardiovascular risk, targets of 130/80 mmHg or lower may apply. "
+        "White-coat and masked hypertension are common; ambulatory or home BP monitoring helps avoid misclassification and overtreatment or undertreatment. "
+        "Pregnancy-related hypertension (gestational hypertension, pre-eclampsia) requires close monitoring and may need delivery for maternal or fetal safety. "
+        "In children and adolescents, hypertension is defined by percentiles for age, sex, and height; causes include obesity and renal or cardiac disease. "
+        "Patient education on self-monitoring, medication adherence, and when to seek help improves outcomes. "
+        "Quality improvement in primary care—audit, reminders, and pharmacist-led titration—increases the proportion of patients at target."
     )
     initial = {
         "task_type": "summarize article",

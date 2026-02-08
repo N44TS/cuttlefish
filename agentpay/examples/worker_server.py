@@ -33,8 +33,15 @@ def _agentpay_status_path() -> Path:
     return Path(os.path.expanduser("~/.openclaw/workspace/agentpay_status.json"))
 
 
-def _write_agentpay_status(status: str, task_type: str = "", balance_after: Optional[str] = None, error: Optional[str] = None) -> None:
-    """Write status so TUI/skill can report 'am I working / did I just finish?'"""
+def _write_agentpay_status(
+    status: str,
+    task_type: str = "",
+    balance_after: Optional[str] = None,
+    error: Optional[str] = None,
+    context: str = "agentpay_worker",
+) -> None:
+    """Write status so TUI/skill can report 'looking for work / working / just finished?'.
+    context='agentpay_worker' so the bot knows this session is an AgentPay worker (not just idle in main chat)."""
     path = _agentpay_status_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,6 +50,7 @@ def _write_agentpay_status(status: str, task_type: str = "", balance_after: Opti
             "task_type": task_type,
             "balance_after": balance_after,
             "error": error,
+            "context": context,
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -65,9 +73,9 @@ def _print_balance_and_llm_at_startup():
         print("[WORKER] Balance check skipped (Yellow bridge or key unavailable).")
     token = (os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD") or "").strip()
     if not token:
-        print("[WORKER] OpenClaw is required. Run 'agentpay setup-openclaw' and start 'openclaw gateway'.")
-        sys.exit(1)
-    print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
+        print("[WORKER] OpenClaw not configured — payment-only mode (return stub result after payment). Set OPENCLAW_* to do real work.")
+    else:
+        print("[WORKER] OpenClaw Gateway configured — worker will ask the bot to do real work.")
     # Ensure worker Yellow channel in background so server can accept connections immediately.
     # (Blocking here for up to 120s was preventing the server from listening, causing client "connection refused".)
     if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and WORKER_PRIVATE_KEY:
@@ -137,8 +145,8 @@ CLIENT_ADDRESS = os.getenv("AGENTPAY_CLIENT_ADDRESS")
 JOB_PRICE_USDC = 0.05
 CHAIN_ID = 11155111
 # Yellow prize: BOTH session (off-chain) AND channel (on-chain settlement).
-# Default: yellow_chunked_full = chunked micropayments (10 chunks) + channel (money moves on-chain).
-PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_chunked_full")
+# Default: yellow_full = one session sign + channel (smooth demo). Use yellow_chunked_full for prize "10 chunks".
+PAYMENT_METHOD = os.getenv("AGENTPAY_PAYMENT_METHOD", "yellow_full")
 
 # Lock (on-chain): ensure worker has a channel once when using session payment.
 _worker_channel_ensured = False
@@ -398,6 +406,7 @@ async def submit_job(request: Request):
     payment_proof = request.headers.get("X-Payment")
     if not payment_proof:
         print("[WORKER] Job received. Sending invoice (402).")
+        _write_agentpay_status("job_received", task_type=job.task_type)
         if PAYMENT_METHOD in ("yellow", "yellow_full", "yellow_chunked", "yellow_chunked_full") and (WORKER_WALLET == "0xYourWorkerAddress" or not WORKER_PRIVATE_KEY):
             return Response(status_code=503, content="Yellow session/chunked needs AGENTPAY_WORKER_PRIVATE_KEY.")
         # Worker channel is ensured at startup so we return 402 immediately (no blocking here).
@@ -442,20 +451,26 @@ async def submit_job(request: Request):
         print(f"[WORKER] Balance (after payment, before job): {bal_before}")
     inp = job.input_data or {}
     query = (inp.get("query") or inp.get("text") or "")
-    n = len(query)
-    print(f"[WORKER] Sending to OpenClaw: {job.task_type} ({n} chars)")
-    try:
-        from agentpay.llm_task import do_task
-        result = do_task(job.task_type, inp)
-        print("[WORKER] OpenClaw completed the task.")
-    except RuntimeError as e:
-        print(f"[WORKER] OpenClaw required but failed: {e}")
-        _write_agentpay_status("idle", error=str(e))
-        return Response(status_code=503, content=str(e))
-    except Exception as e:
-        print(f"[WORKER] Task error: {e}")
-        _write_agentpay_status("idle", error=str(e))
-        return Response(status_code=503, content=str(e))
+    token = (os.getenv("OPENCLAW_GATEWAY_TOKEN") or os.getenv("OPENCLAW_GATEWAY_PASSWORD") or "").strip()
+    if not token or os.getenv("AGENTPAY_PAYMENT_ONLY", "").strip().lower() in ("1", "true", "yes"):
+        # Payment-only test: no OpenClaw, return stub so client sees completed hire.
+        result = f"Payment test OK — {job.task_type} (no OpenClaw; stub result)"
+        print("[WORKER] Payment-only mode: returning stub result.")
+    else:
+        n = len(query)
+        print(f"[WORKER] Sending to OpenClaw: {job.task_type} ({n} chars)")
+        try:
+            from agentpay.llm_task import do_task
+            result = do_task(job.task_type, inp)
+            print("[WORKER] OpenClaw completed the task.")
+        except RuntimeError as e:
+            print(f"[WORKER] OpenClaw required but failed: {e}")
+            _write_agentpay_status("idle", error=str(e))
+            return Response(status_code=503, content=str(e))
+        except Exception as e:
+            print(f"[WORKER] Task error: {e}")
+            _write_agentpay_status("idle", error=str(e))
+            return Response(status_code=503, content=str(e))
     bal_after = _worker_yellow_balance()
     bal_str = str(bal_after) if bal_after is not None else None
     if bal_after is not None:
