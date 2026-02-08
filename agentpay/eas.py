@@ -57,7 +57,7 @@ EAS_ABI = [
 # - Set AGENTPAY_EAS_SCHEMA_UID in .env (your own use), or
 # - Paste the schema UID below so end users get it by default (no .env needed).
 # Example schema: "bytes32 jobId, address requester, address worker, uint256 amountWei, string taskType, bool success"
-DEFAULT_JOB_REVIEW_SCHEMA_UID = ""  # Paste your Sepolia schema UID here (0x...) so end users don't need .env
+DEFAULT_JOB_REVIEW_SCHEMA_UID = "0x64cd6993a4837265e24cd43ec55a9095789459d09a57be95240921c5279c8e6e"  # Paste your Sepolia schema UID here (0x...) so end users don't need .env
 JOB_RECEIPT_SCHEMA_UID = os.getenv("AGENTPAY_EAS_SCHEMA_UID", "").strip() or DEFAULT_JOB_REVIEW_SCHEMA_UID
 
 

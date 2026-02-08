@@ -607,6 +607,7 @@ def autonomous_client_command():
                 hire_result["error"] = None
                 hire_result["result"] = getattr(result, "result", None)
                 hire_result["payment_tx_hash"] = getattr(result, "payment_tx_hash", None)
+                hire_result["worker"] = getattr(result, "worker", None)
             else:
                 hire_result["completed"] = False
                 hire_result["error"] = getattr(result, "error", None) if result else "no result"
@@ -622,8 +623,10 @@ def autonomous_client_command():
                     print(outcome if isinstance(outcome, str) else outcome)
                     print("---")
                 print("")
-                print("[CLIENT] Dispute: if you  if you are unhappy with the outcome, run: agentpay adjudicator submit-dispute")
-                print("[CLIENT] Attest: rate this worker on-chain (EAS review) — set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) to enable.")
+                worker_addr = hire_result.get("worker")
+                if worker_addr:
+                    print(f"[CLIENT] Rate this worker:  agentpay attest {worker_addr}   (add --no for negative)")
+                print("[CLIENT] Dispute: if you are unhappy with the outcome, run: agentpay adjudicator submit-dispute")
             else:
                 print(f"\n⚠️ Hire by capability failed: {hire_result.get('error')}")
             return
@@ -654,8 +657,10 @@ def autonomous_client_command():
                 print(outcome)
             print("---")
         print("")
+        worker_addr = hire_result.get("worker")
+        if worker_addr:
+            print(f"[CLIENT] Rate this worker:  agentpay attest {worker_addr}   (add --no for negative)")
         print("[CLIENT] Dispute: if you are unhappy with the outcome, run: agentpay adjudicator submit-dispute")
-        print("[CLIENT] Attest: rate this worker on-chain (EAS review) — set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) to enable.")
     else:
         err = hire_result.get("error") or "hire did not complete"
         print(f"\n⚠️ Client finished: job posted and accept seen, but hire did not complete: {err}")
@@ -720,6 +725,89 @@ def adjudicator_info_command():
     print("  Infra: present. Production: wire contract call (currently demo auto-release).")
 
 
+def attest_command():
+    """Rate a worker on-chain (EAS). Usage: agentpay attest 0xWorkerAddress [--no for negative]"""
+    _load_dotenv()
+    if len(sys.argv) < 3:
+        print("Usage: agentpay attest <worker_address> [--no]")
+        print("  worker_address = 0x... (the worker's wallet; shown after a completed job)")
+        print("  Omit --no for a positive review (5 stars). Use --no for a negative review.")
+        print("  Uses CLIENT_PRIVATE_KEY to pay gas.")
+        sys.exit(1)
+    worker = sys.argv[2].strip()
+    negative = "--no" in sys.argv or "--bad" in sys.argv
+    if not worker.startswith("0x") or len(worker) != 42:
+        print("Worker must be a 0x address (42 chars). Use the address shown after a completed job.")
+        sys.exit(1)
+    pk = (os.getenv("CLIENT_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY") or "").strip()
+    if not pk:
+        print("CLIENT_PRIVATE_KEY required (payer for gas). Put it in .env.")
+        sys.exit(1)
+    import secrets
+    from agentpay import AgentWallet
+    from agentpay.eas import create_job_review, JOB_RECEIPT_SCHEMA_UID
+    if not JOB_RECEIPT_SCHEMA_UID or JOB_RECEIPT_SCHEMA_UID == "0x" + "0" * 64:
+        print("EAS schema not set. Project maintainer: add DEFAULT_JOB_REVIEW_SCHEMA_UID in agentpay/eas.py (see EAS_SETUP_GUIDE.md).")
+        sys.exit(1)
+    wallet = AgentWallet()
+    job_id = "attest-" + secrets.token_hex(4)
+    tx = create_job_review(
+        job_id=job_id,
+        worker_address=worker,
+        requester_wallet=wallet,
+        amount_usdc=0.05,
+        task_type="job",
+        success=not negative,
+    )
+    if not tx:
+        print("Attestation failed (check schema UID and Sepolia ETH for gas).")
+        sys.exit(1)
+    print("Negative review on-chain." if negative else "Rated on-chain (5 stars).")
+    print(f"  Tx: https://sepolia.easscan.org/tx/{tx}")
+    print(f"  View this worker's reviews: https://sepolia.easscan.org/attestations (filter by recipient = worker address)")
+    ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip()
+    if ens_name:
+        ens_name = ens_name if ens_name.endswith(".eth") else (ens_name.removesuffix(".eth").strip() + ".eth")
+        try:
+            from agentpay.ens2 import set_review_record
+            if set_review_record(ens_name, tx, wallet):
+                print("  Linked to your ENS: agentpay.review is set. View it at https://sepolia.app.ens.domains/" + ens_name)
+        except Exception:
+            pass
+    print("  Worker can run: agentpay link-my-reviews — so their ENS points to reviews FOR them (for judges).")
+
+
+def link_my_reviews_command():
+    """Worker: set agentpay.reviews on YOUR ENS to the URL where reviews FOR you appear (EAS by recipient)."""
+    _load_dotenv()
+    pk = (os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY") or "").strip()
+    if not pk:
+        print("AGENTPAY_WORKER_PRIVATE_KEY required (worker's key; must own the ENS name). Put it in .env.")
+        sys.exit(1)
+    ens_name = (os.getenv("AGENTPAY_ENS_NAME") or _ens_name_from_env_file() or "").strip()
+    if not ens_name:
+        print("AGENTPAY_ENS_NAME required (your .eth name). Put it in .env.")
+        sys.exit(1)
+    from agentpay import AgentWallet
+    from agentpay.ens2 import set_reviews_link_for_worker
+    wallet = AgentWallet.from_key(pk)
+    worker_address = wallet.address
+    if not worker_address.startswith("0x"):
+        worker_address = "0x" + worker_address
+    try:
+        if set_reviews_link_for_worker(ens_name, worker_address, wallet):
+            n = ens_name if ens_name.endswith(".eth") else (ens_name.removesuffix(".eth").strip() + ".eth")
+            print("Your ENS now points to reviews FOR you.")
+            print(f"  View at: https://sepolia.app.ens.domains/{n}")
+            print("  Judges see agentpay.reviews = link to your EAS attestations (recipient = you).")
+        else:
+            print("Failed (resolver missing or tx error). Ensure this wallet owns the ENS name and it has a resolver.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
 def adjudicator_submit_dispute_command():
     """Worker runs this when client refused to sign; submits dispute (demo: auto-release)."""
     try:
@@ -751,6 +839,8 @@ def main():
         print("  agentpay autonomous-client — Client: post offer, watch for accepts, pay")
         print("  agentpay adjudicator [info] — Show dispute-resolution infra")
         print("  agentpay adjudicator submit-dispute — Worker: submit dispute (demo)")
+        print("  agentpay attest <0xWorkerAddress> — Rate worker on-chain (5 stars, EAS)")
+        print("  agentpay link-my-reviews — Worker: set your ENS so reviews FOR you are visible (for judges)")
         print("  agentpay install-skill — Install AgentPay skill into OpenClaw (so the bot sees it)")
         print("\nExamples:")
         print("  agentpay setup")
@@ -778,11 +868,15 @@ def main():
         adjudicator_submit_dispute_command()
     elif command == "adjudicator":
         adjudicator_info_command()
+    elif command == "attest":
+        attest_command()
+    elif command == "link-my-reviews":
+        link_my_reviews_command()
     elif command == "install-skill":
         install_skill_command()
     else:
         print(f"Unknown command: {command}")
-        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client', 'agentpay adjudicator-info', 'agentpay install-skill'")
+        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client', 'agentpay attest <0xWorker>', 'agentpay link-my-reviews', 'agentpay adjudicator-info', 'agentpay install-skill'")
         sys.exit(1)
 
 
