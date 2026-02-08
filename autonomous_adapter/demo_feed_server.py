@@ -81,13 +81,19 @@ class FeedHandler(BaseHTTPRequestHandler):
         post_id = str(uuid.uuid4())[:8]
         thread_id = data.get("thread_id") or post_id
         now = datetime.now(timezone.utc).isoformat()
+        # Optional: store full_text (e.g. article for offers) but don't store in item for GET unless we want to
+        full_text = (data.get("full_text") or "").strip()
         item = {"id": post_id, "text": text, "thread_id": thread_id, "created_at": now}
         FEED.append(item)
-        # Show the "conversation" in the feed terminal so humans see what's happening
-        preview = text.replace("\n", " ").strip()[:120]
-        if len(text) > 120:
-            preview += "..."
-        print(f"[FEED] POST #{post_id}: {preview}")
+        # Show in feed terminal: full text if short (so ENS never cut), else preview
+        one_line = text.replace("\n", " ").strip()
+        if len(one_line) <= 250:
+            print(f"[FEED] POST #{post_id}: {one_line}")
+        else:
+            preview = one_line[:200] + "..."
+            print(f"[FEED] POST #{post_id}: {preview}")
+        if full_text:
+            print(f"[FEED] --- Article / input (for this offer) ---\n{full_text}\n[FEED] ---")
         self._send_json(201, item)
 
 

@@ -69,6 +69,9 @@ def load_or_create_key(key_path: Optional[Path] = None, save: bool = True) -> Lo
             + check_balance_hint
         )
     pk = pk_env.strip()
+    # Common typo: export CLIENT_PRIVATE_KEY==0x... leaves "=0x..." in env
+    while pk.startswith("="):
+        pk = pk.lstrip("=").strip()
     if pk.startswith("0x"):
         pk = pk[2:]
     return Account.from_key(pk)
@@ -159,10 +162,13 @@ class AgentWallet:
 
     @classmethod
     def from_key(cls, private_key: str) -> "AgentWallet":
-        """Create wallet from raw private key (hex string)."""
-        if private_key.startswith("0x"):
-            private_key = private_key[2:]
-        acc = Account.from_key(private_key)
+        """Create wallet from raw private key (hex string). Tolerates leading = (e.g. typo CLIENT_PRIVATE_KEY==0x...)."""
+        pk = (private_key or "").strip()
+        while pk.startswith("="):
+            pk = pk.lstrip("=").strip()
+        if pk.startswith("0x"):
+            pk = pk[2:]
+        acc = Account.from_key(pk)
         return cls(account=acc)
 
     @classmethod

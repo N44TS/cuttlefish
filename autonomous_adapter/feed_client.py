@@ -62,9 +62,12 @@ def post_reply(thread_id: str, text: str) -> Optional[Dict[str, Any]]:
     return _post_feed({"text": text, "thread_id": thread_id})
 
 
-def post_offer(text: str) -> Optional[Dict[str, Any]]:
-    """Post a new offer (new thread). Returns created post or None."""
-    return _post_feed({"text": text})
+def post_offer(text: str, full_text: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Post a new offer (new thread). If full_text (e.g. article to summarise), demo feed will print it."""
+    payload = {"text": text}
+    if full_text and full_text.strip():
+        payload["full_text"] = full_text.strip()
+    return _post_feed(payload)
 
 
 def _post_feed(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

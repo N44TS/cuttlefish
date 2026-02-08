@@ -162,7 +162,8 @@ def build_demo_config(
         input_data = initial_offer.get("input_data") or {"query": "Demo task"}
         poster_ens = initial_offer.get("poster_ens") or my_ens or "client"
         text = format_offer_text(task_type, price, initial_offer.get("input_ref"), poster_ens)
-        created = feed_client.post_offer(text)
+        full_text = input_data.get("query") or input_data.get("text") or ""
+        created = feed_client.post_offer(text, full_text=full_text if full_text else None)
         if created and created.get("id"):
             offer_store[created["id"]] = {"task_type": task_type, "input_data": input_data}
 
