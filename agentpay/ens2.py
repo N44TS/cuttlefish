@@ -135,6 +135,24 @@ def _connect(rpc: Optional[str] = None) -> Web3:
     return w3
 
 
+def _get_effective_manager(w3: Web3, registry, node: bytes, ens_name: str, mainnet: bool = False) -> Optional[str]:
+    """Address that can call setText for this name (registry owner, or .eth NFT owner if owner is Base Registrar). Returns None for wrapped names (cannot infer single owner from ERC1155)."""
+    owner = registry.functions.owner(node).call()
+    if not owner or owner == "0x0000000000000000000000000000000000000000":
+        return None
+    base_registrar_addr = (SEPOLIA_BASE_REGISTRAR if not mainnet else "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85").lower()
+    if owner.lower() == base_registrar_addr:
+        label = ens_name.removesuffix(".eth")
+        token_id = _label_to_token_id(label)
+        base_registrar = w3.eth.contract(address=Web3.to_checksum_address(SEPOLIA_BASE_REGISTRAR if not mainnet else "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85"), abi=BASE_REGISTRAR_ABI)
+        try:
+            return base_registrar.functions.ownerOf(token_id).call()
+        except Exception:
+            return None
+    # EOA or other contract (e.g. Name Wrapper); for EOA this is the manager
+    return owner
+
+
 def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Transaction"):
     """Wait for tx receipt; longer timeout for Sepolia; clear error on timeout."""
     tx_hex = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
@@ -548,6 +566,7 @@ def set_review_record(ens_name: str, attestation_tx_or_uid: str, wallet: "AgentW
     Set agentpay.review on an ENS name to the EAS attestation tx (or UID).
     Links EAS review to ENS for prize. Caller (wallet) must own the ENS name.
     Returns True if set, False if resolver missing or tx failed.
+    Raises ValueError if wallet does not own the name (so caller can skip without sending a reverting tx).
     """
     rpc_urls = [rpc_url] if rpc_url else (MAINNET_RPCS if mainnet else SEPOLIA_RPCS)
     w3 = _connect_multiple(rpc_urls)
@@ -559,6 +578,19 @@ def set_review_record(ens_name: str, attestation_tx_or_uid: str, wallet: "AgentW
         resolver_addr = registry.functions.resolver(node).call()
         if not resolver_addr or resolver_addr == "0x0000000000000000000000000000000000000000":
             return False
+        manager = _get_effective_manager(w3, registry, node, n, mainnet=mainnet)
+        if manager is not None and manager.lower() != wallet.address.lower():
+            raise ValueError(
+                f"CLIENT_PRIVATE_KEY does not own the ENS name '{n}'. "
+                "Run 'agentpay setup' to reclaim the name, or set AGENTPAY_ENS_NAME to a name you own with this key."
+            )
+        owner = registry.functions.owner(node).call()
+        base_registrar_addr = (SEPOLIA_BASE_REGISTRAR if not mainnet else "0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85").lower()
+        if owner and owner.lower() == base_registrar_addr:
+            raise ValueError(
+                f"ENS name '{n}' is not reclaimed. The resolver only accepts setText from the registry owner. "
+                "Run 'agentpay setup' to reclaim the name, then run attest again."
+            )
         resolver = w3.eth.contract(address=Web3.to_checksum_address(resolver_addr), abi=RESOLVER_ABI)
         tx = resolver.functions.setText(node, KEY_REVIEW, attestation_tx_or_uid.strip()).build_transaction({
             "from": wallet.address,
@@ -573,6 +605,14 @@ def set_review_record(ens_name: str, attestation_tx_or_uid: str, wallet: "AgentW
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
         _wait_receipt(w3, tx_hash, timeout=120, description="Set agentpay.review")
         return True
+    except ValueError:
+        raise
+    except RuntimeError as e:
+        if "status 0" in str(e) or "status: 0" in str(e):
+            raise RuntimeError(
+                f"Set agentpay.review reverted. Ensure CLIENT_PRIVATE_KEY owns the ENS name '{n}' (run 'agentpay setup' to reclaim). {e}"
+            ) from e
+        raise
     except Exception:
         return False
 

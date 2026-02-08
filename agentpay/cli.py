@@ -750,15 +750,43 @@ def attest_command():
         print("EAS schema not set. Project maintainer: add DEFAULT_JOB_REVIEW_SCHEMA_UID in agentpay/eas.py (see EAS_SETUP_GUIDE.md).")
         sys.exit(1)
     wallet = AgentWallet()
+    # Quick check: client pays gas; need a little Sepolia ETH
+    try:
+        from web3 import Web3
+        from agentpay.eas import SEPOLIA_RPCS
+        _w3 = None
+        for _url in SEPOLIA_RPCS:
+            if not _url or not str(_url).strip():
+                continue
+            try:
+                _w3 = Web3(Web3.HTTPProvider(str(_url).strip(), request_kwargs={"timeout": 10}))
+                if _w3.is_connected():
+                    break
+            except Exception:
+                continue
+        if _w3 and _w3.is_connected():
+            _bal = _w3.eth.get_balance(wallet.address)
+            if _bal < 100_000_000_000_000:  # 0.0001 ETH
+                print("Attestation failed: client wallet has almost no Sepolia ETH (need gas for attest tx).")
+                print("  Send Sepolia ETH to:", wallet.address)
+                print("  Faucet: https://sepoliafaucet.com")
+                sys.exit(1)
+    except Exception:
+        pass
     job_id = "attest-" + secrets.token_hex(4)
-    tx = create_job_review(
-        job_id=job_id,
-        worker_address=worker,
-        requester_wallet=wallet,
-        amount_usdc=0.05,
-        task_type="job",
-        success=not negative,
-    )
+    try:
+        tx = create_job_review(
+            job_id=job_id,
+            worker_address=worker,
+            requester_wallet=wallet,
+            amount_usdc=0.05,
+            task_type="job",
+            success=not negative,
+        )
+    except Exception as e:
+        print("Attestation failed:", e)
+        print("  Common: (1) Client needs Sepolia ETH for gas. (2) Schema UID must match EAS Sepolia. (3) Check .env CLIENT_PRIVATE_KEY.")
+        sys.exit(1)
     if not tx:
         print("Attestation failed (check schema UID and Sepolia ETH for gas).")
         sys.exit(1)
@@ -772,6 +800,8 @@ def attest_command():
             from agentpay.ens2 import set_review_record
             if set_review_record(ens_name, tx, wallet):
                 print("  Linked to your ENS: agentpay.review is set. View it at https://sepolia.app.ens.domains/" + ens_name)
+        except (ValueError, RuntimeError):
+            pass  # Review is on EAS; client ENS link is optional
         except Exception:
             pass
     print("  Worker can run: agentpay link-my-reviews — so their ENS points to reviews FOR them (for judges).")

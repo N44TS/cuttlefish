@@ -18,7 +18,11 @@ from agentpay.wallet import AgentWallet
 # EAS on Sepolia
 EAS_SEPOLIA = "0xC2679fBD37d54388Ce493F1DB75320D236e1815e"
 SCHEMA_REGISTRY_SEPOLIA = "0x0a7E2Ff54e76B8E6659aedc9103FB21c038050D0"
-SEPOLIA_RPC = os.getenv("SEPOLIA_RPC", "https://rpc.sepolia.org")
+SEPOLIA_RPCS = [
+    os.getenv("SEPOLIA_RPC", "https://ethereum-sepolia-rpc.publicnode.com"),
+    "https://rpc.sepolia.org",
+    "https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161",
+]
 
 # Minimal ABI for attest()
 EAS_ABI = [
@@ -91,13 +95,27 @@ def create_job_review(
     Prerequisite: Register a schema on EAS Sepolia (sepolia.easscan.org) and set
     AGENTPAY_EAS_SCHEMA_UID or pass schema_uid_hex.
     """
-    rpc_url = rpc_url or SEPOLIA_RPC
     schema_uid_hex = schema_uid_hex or JOB_RECEIPT_SCHEMA_UID
     if not schema_uid_hex or schema_uid_hex == "0x" + "0" * 64:
         return None
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
-    if not w3.is_connected():
-        return None
+    w3 = None
+    if rpc_url:
+        w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 30}))
+        if not w3.is_connected():
+            raise RuntimeError(f"Sepolia RPC not connected: {rpc_url}")
+    else:
+        w3 = None
+        for url in SEPOLIA_RPCS:
+            if not url or not url.strip():
+                continue
+            try:
+                w3 = Web3(Web3.HTTPProvider(url.strip(), request_kwargs={"timeout": 15}))
+                if w3.is_connected():
+                    break
+            except Exception:
+                continue
+        if not w3 or not w3.is_connected():
+            raise RuntimeError("Could not connect to any Sepolia RPC. Set SEPOLIA_RPC in .env or check network.")
     schema_uid = bytes.fromhex(schema_uid_hex.replace("0x", "").zfill(64)[-64:])
     data = _encode_receipt_data(
         job_id, requester_wallet.address, worker_address, amount_usdc, task_type, success
@@ -107,24 +125,54 @@ def create_job_review(
         schema_uid,
         (
             Web3.to_checksum_address(worker_address),  # recipient = worker (reviews about this worker)
-            0,  # expirationTime
+            0,  # expirationTime (0 = no expiration per EAS Common.sol)
             True,  # revocable
             b"\x00" * 32,  # refUID
             data,
             0,  # value
         ),
     )
-    tx = eas.functions.attest(request).build_transaction(
-        {
-            "from": requester_wallet.address,
-            "chainId": 11155111,
-            "gas": 200_000,
-            "nonce": w3.eth.get_transaction_count(requester_wallet.address),
-        }
-    )
+    # Gas: EAS attest typically needs ~150k–300k; use 400k so RPC eth_call and real tx both succeed
+    gas_limit = 400_000
+    # Dry-run when possible to surface revert reason; skip if RPC limits call gas
+    try:
+        eas.functions.attest(request).call(
+            {"from": requester_wallet.address, "gas": gas_limit}
+        )
+    except Exception as dry_err:
+        msg = str(dry_err)
+        if "out of gas" in msg.lower():
+            # RPC often caps eth_call; proceed with real tx (it has its own gas)
+            pass
+        elif "InvalidSchema" in msg or "schema" in msg.lower():
+            raise RuntimeError(
+                "EAS attest reverted (InvalidSchema): schema UID not found on this chain. "
+                "Register the schema at https://sepolia.easscan.org and use that schema UID."
+            ) from dry_err
+        elif "InvalidExpirationTime" in msg:
+            raise RuntimeError("EAS attest reverted: InvalidExpirationTime.") from dry_err
+        elif "InvalidAttestation" in msg:
+            raise RuntimeError(
+                "EAS attest reverted (InvalidAttestation): resolver or data validation failed."
+            ) from dry_err
+        else:
+            raise RuntimeError(f"EAS attest would revert: {msg}") from dry_err
+    try:
+        tx = eas.functions.attest(request).build_transaction(
+            {
+                "from": requester_wallet.address,
+                "chainId": 11155111,
+                "gas": gas_limit,
+                "nonce": w3.eth.get_transaction_count(requester_wallet.address),
+            }
+        )
+    except Exception as e:
+        raise RuntimeError(f"EAS build_transaction failed (check schema UID matches EAS Sepolia): {e}") from e
     signed = requester_wallet.account.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
     if receipt["status"] != 1:
-        return None
+        raise RuntimeError(
+            f"EAS attestation reverted. See tx on Etherscan: https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
+        )
     return tx_hash.hex()
