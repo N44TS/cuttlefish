@@ -597,6 +597,14 @@ def get_agent_info(ens_name: str, rpc_url: Optional[str] = None, mainnet: bool =
         return None
 
 
+def _normalize_capability_spelling(s: str) -> str:
+    """British/American: so 'summarise' and 'summarize' match."""
+    s = s.strip().lower()
+    for british, american in (("summarise", "summarize"), ("summarises", "summarizes"), ("analyse", "analyze"), ("analyses", "analyzes")):
+        s = s.replace(british, american)
+    return s
+
+
 def discover_agents(
     capability: str,
     known_agents: List[str],
@@ -607,19 +615,21 @@ def discover_agents(
     Find agents that offer a capability. Checks a list of ENS names.
 
     In production you'd use a subgraph or indexer; here we check known_agents.
+    British/American spelling (e.g. summarise/summarize) is normalized so both match.
     """
     out = []
-    want = capability.strip().lower()
+    want = _normalize_capability_spelling(capability)
     for ens_name in known_agents:
         info = get_agent_info(ens_name, rpc_url=rpc_url, mainnet=mainnet)
         if not info:
             continue
         caps = [c.strip().lower() for c in (info.get("capabilities") or "").split(",") if c.strip()]
-        if want in caps:
+        caps_normalized = [_normalize_capability_spelling(c) for c in caps]
+        if want in caps or want in caps_normalized:
             out.append(info)
             continue
-        # Flexible: e.g. "summarize" matches ENS "summarize medical articles"
-        if any(want in cap or cap.startswith(want) for cap in caps):
+        # Flexible: e.g. "summarize" matches ENS "summarise medical articles"
+        if any(want in _normalize_capability_spelling(cap) or _normalize_capability_spelling(cap).startswith(want) for cap in caps):
             out.append(info)
     return out
 
