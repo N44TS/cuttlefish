@@ -523,6 +523,19 @@ def provision_ens_identity(
                 raise RuntimeError("Signed transaction missing raw transaction data")
             tx_hash = w3.eth.send_raw_transaction(raw_tx)
             _wait_receipt(w3, tx_hash, timeout=300, description=f"Set {key}")
+
+        # Set agentpay.reviews so this ENS points to "reviews FOR this worker" (for judges)
+        worker_addr = getattr(wallet, "address", None) or (getattr(wallet.account, "address", None) if hasattr(wallet, "account") else None)
+        if worker_addr and not str(worker_addr).startswith("0x"):
+            worker_addr = "0x" + str(worker_addr)
+        if worker_addr:
+            try:
+                if set_reviews_link_for_worker(ens_name, worker_addr, wallet, rpc_url=rpc_url, mainnet=False):
+                    print(f"   ✅ Set {KEY_REVIEWS} (reviews-for-you link)")
+                else:
+                    print(f"   (Optional: run 'agentpay link-my-reviews' later to set {KEY_REVIEWS})")
+            except Exception:
+                print(f"   (Optional: run 'agentpay link-my-reviews' later to set {KEY_REVIEWS})")
     except RuntimeError as e:
         return False, str(e)
 
@@ -569,7 +582,8 @@ def set_reviews_link_for_worker(ens_name: str, worker_address: str, wallet: "Age
     Set agentpay.reviews on the WORKER's ENS to a URL where reviews FOR this worker can be seen (EAS attestations, recipient = worker).
     The worker runs this so their .eth name points to "reviews about me". Caller (wallet) must own the ENS name.
     """
-    url = f"https://sepolia.easscan.org/attestations?recipient={worker_address}" if not mainnet else f"https://easscan.org/attestations?recipient={worker_address}"
+    # Address page shows "Attestations Received" for this worker (reviews FOR them). Query param on /attestations doesn't filter.
+    url = f"https://sepolia.easscan.org/address/{worker_address}" if not mainnet else f"https://easscan.org/address/{worker_address}"
     rpc_urls = [rpc_url] if rpc_url else (MAINNET_RPCS if mainnet else SEPOLIA_RPCS)
     w3 = _connect_multiple(rpc_urls)
     registry = w3.eth.contract(address=Web3.to_checksum_address(SEPOLIA_ENS_REGISTRY if not mainnet else "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"), abi=REGISTRY_ABI)
@@ -584,7 +598,7 @@ def set_reviews_link_for_worker(ens_name: str, worker_address: str, wallet: "Age
         tx = resolver.functions.setText(node, KEY_REVIEWS, url).build_transaction({
             "from": wallet.address,
             "chainId": w3.eth.chain_id,
-            "gas": 80000,
+            "gas": 200000,
             "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
         })
         signed = wallet.account.sign_transaction(tx)

@@ -764,7 +764,7 @@ def attest_command():
         sys.exit(1)
     print("Negative review on-chain." if negative else "Rated on-chain (5 stars).")
     print(f"  Tx: https://sepolia.easscan.org/tx/{tx}")
-    print(f"  View this worker's reviews: https://sepolia.easscan.org/attestations (filter by recipient = worker address)")
+    print(f"  View this worker's reviews: https://sepolia.easscan.org/address/{worker} (Attestations Received)")
     ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "").strip()
     if ens_name:
         ens_name = ens_name if ens_name.endswith(".eth") else (ens_name.removesuffix(".eth").strip() + ".eth")
@@ -780,7 +780,7 @@ def attest_command():
 def link_my_reviews_command():
     """Worker: set agentpay.reviews on YOUR ENS to the URL where reviews FOR you appear (EAS by recipient)."""
     _load_dotenv()
-    pk = (os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY") or "").strip()
+    pk = (os.getenv("AGENTPAY_WORKER_PRIVATE_KEY") or os.getenv("AGENTPAY_PRIVATE_KEY") or os.getenv("CLIENT_PRIVATE_KEY") or "").strip()
     if not pk:
         print("AGENTPAY_WORKER_PRIVATE_KEY required (worker's key; must own the ENS name). Put it in .env.")
         sys.exit(1)
