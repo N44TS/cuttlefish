@@ -660,6 +660,20 @@ def install_skill_command():
     print("\nNext: Run 'openclaw skills list' to verify. Restart the gateway (or start a new chat) so the skill appears.")
 
 
+def adjudicator_info_command():
+    """Show that Adjudicator infra exists (stub for demo: contract + submit_dispute/release_to_worker)."""
+    try:
+        from agentpay.adjudicator import ADJUDICATOR_ADDRESS, submit_dispute, release_to_worker
+    except ImportError as e:
+        print(f"Adjudicator: not available ({e})")
+        return
+    print("Adjudicator (dispute resolution)")
+    print("  Contract (Sepolia):", ADJUDICATOR_ADDRESS)
+    print("  submit_dispute(...) — worker submits last signed state + proof of delivery")
+    print("  release_to_worker(...) — after challenge period, release funds to worker")
+    print("  Infra: present. Production: wire contract call (currently demo auto-release).")
+
+
 def main():
     """CLI entry point."""
     _load_dotenv()
@@ -672,6 +686,7 @@ def main():
         print("  agentpay demo-feed       — Start demo feed server (for autonomous demo)")
         print("  agentpay autonomous-worker — Worker + watch feed, reply to offers")
         print("  agentpay autonomous-client — Client: post offer, watch for accepts, pay")
+        print("  agentpay adjudicator-info — Show dispute-resolution infra (stub)")
         print("  agentpay install-skill — Install AgentPay skill into OpenClaw (so the bot sees it)")
         print("\nExamples:")
         print("  agentpay setup")
@@ -693,11 +708,13 @@ def main():
         autonomous_worker_command()
     elif command == "autonomous-client":
         autonomous_client_command()
+    elif command == "adjudicator-info":
+        adjudicator_info_command()
     elif command == "install-skill":
         install_skill_command()
     else:
         print(f"Unknown command: {command}")
-        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client', 'agentpay install-skill'")
+        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client', 'agentpay adjudicator-info', 'agentpay install-skill'")
         sys.exit(1)
 
 
