@@ -444,6 +444,18 @@ async def submit_job(request: Request):
     if not ok:
         debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
         return Response(status_code=402, content=f"{reason} (received: {debug})")
+    # Show on-chain tx for DeFi hackathon proof (yellow_chunked_full / yellow_full / channel = tx at end or whole proof)
+    p = (payment_proof or "").strip()
+    if p.startswith("yellow_chunked_full|") and p.count("|") >= 3:
+        tx = p.split("|")[3].strip()
+        if tx.startswith("0x") and len(tx) == 66:
+            print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx}")
+    elif p.startswith("yellow_full|") and p.count("|") >= 4:
+        tx = p.split("|")[-1].strip()
+        if tx.startswith("0x") and len(tx) == 66:
+            print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx}")
+    elif p.startswith("0x") and len(p) == 66:
+        print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{p}")
     print("[WORKER] Payment verified. Doing work...")
     _write_agentpay_status("working", task_type=job.task_type)
     bal_before = _worker_yellow_balance()

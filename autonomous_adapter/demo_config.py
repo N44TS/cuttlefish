@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import feed_client
-from .trigger_agentpay import trigger_hire_from_accept
+from .trigger_agentpay import trigger_hire_from_accept, trigger_hire_by_capability
 
 
 def _ens_from_env_file() -> str:
@@ -73,12 +73,12 @@ def build_demo_config(
     initial_offer: If role=client, optional dict { task_type, price?, input_data?, poster_ens? }.
       When provided, we post this offer once before the loop and store it so we can trigger hire later.
     """
-    # Prefer .env file so ENS is not truncated by shell (e.g. export char limits). No hardcoded names — each user has their own ENS.
+    # Prefer .env file so ENS is not truncated by shell. We use the full value (no slicing).
     raw = (my_ens or _ens_from_env_file() or os.getenv("AGENTPAY_ENS_NAME") or "").strip().rstrip(".eth").replace("\r", "").replace("\n", "").strip()
     my_ens = raw
     if role == "worker" and not my_ens:
         my_ens = "worker"
-    ens_suffix = f"{my_ens}.eth" if my_ens else "me.eth"
+    ens_suffix = f"{my_ens}.eth" if my_ens else "me.eth"  # Full name; nothing in this code truncates it.
 
     if offer_store is None and role == "client":
         offer_store = {}
@@ -126,11 +126,22 @@ def build_demo_config(
         task_type = ctx.get("task_type") or "analyze-data"
         input_data = ctx.get("input_data") or {"query": "Demo task"}
         try:
-            result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
+            # Optional: hire by capability (demo) — set AGENTPAY_HIRE_BY_CAPABILITY=1 and AGENTPAY_KNOWN_AGENTS=ens.eth
+            known_agents_raw = (os.getenv("AGENTPAY_KNOWN_AGENTS") or "").strip()
+            if os.getenv("AGENTPAY_HIRE_BY_CAPABILITY") and known_agents_raw:
+                known_agents = [(n.strip() if n.strip().endswith(".eth") else n.strip() + ".eth") for n in known_agents_raw.split(",") if n.strip()]
+                if known_agents:
+                    print(f"[CLIENT] Hiring by capability '{task_type}' (known_agents: {known_agents})")
+                    result = trigger_hire_by_capability(task_type, known_agents, task_type, input_data)
+                else:
+                    result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
+            else:
+                result = trigger_hire_from_accept(a, task_type=task_type, input_data=input_data)
             if result and getattr(result, "status", None) == "completed":
                 hire_result["completed"] = True
                 hire_result["error"] = None
                 hire_result["result"] = getattr(result, "result", None)
+                hire_result["payment_tx_hash"] = getattr(result, "payment_tx_hash", None)
             else:
                 err = getattr(result, "error", None) or str(result)
                 hire_result["completed"] = False

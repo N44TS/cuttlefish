@@ -599,6 +599,9 @@ def autonomous_client_command():
     hire_result = config.get("_hire_result") or {}
     if hire_result.get("completed"):
         print("\n✅ Client finished: one job posted, one hire completed, exiting.")
+        tx_hash = hire_result.get("payment_tx_hash")
+        if tx_hash and isinstance(tx_hash, str) and tx_hash.startswith("0x"):
+            print(f"[CLIENT] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx_hash}")
         outcome = hire_result.get("result")
         if outcome is not None:
             print("\n--- Result from worker (bot's answer) ---")
