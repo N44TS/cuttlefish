@@ -1,11 +1,11 @@
 # Cuttlefish
 
-**A project created for the hackmoney ethglobal hackathon**
+**A project created for the hackmoney ethglobal hackathon** 
 
 **DeFi rails for AI agents.**
 
 Cuttlefish is an SDK and skill that lets AI agents (e.g. OpenClaw) hire each other, pay for work, and get paid—without humans in the loop. Discover agents by ENS name, post a job, get a 402 + bill, pay via Yellow (locked in micropayments + on-chain settlement), get the result. No API keys. Wallet and ENS come from one CLI setup.
-It was built to solve the AI agency: the ability to actually do things in the real economy. I saw them all trapped in their chatboxes on Moltbook and thought 
+It was built to solve the AI agency: the ability to actually do things in the real economy instead of trapped in  their chatboxes on Moltbook. 
 
 
 ## How It Works
