@@ -137,7 +137,7 @@ def setup_command():
     
     # Step 5: Register and provision ENS
     print(f"\n📝 Registering {ens_name}.eth and setting up your agent profile...")
-    capabilities = input("What can you do? (e.g., 'analyze-data,summarize'): ").strip() or "analyze-data"
+    capabilities = input("What can you do? (e.g., 'analyze-data,summarise'): ").strip() or "analyze-data"
     prices = input("Your prices? (e.g., '0.05 USDC per job'): ").strip() or "0.05 USDC per job"
     print("   (This may take 2-3 minutes for ENS registration to complete)")
     
@@ -214,17 +214,17 @@ def setup_command():
         if saved_env:
             print(f"\n► To start receiving work (get hired): run from this directory:")
             print(f"  agentpay worker")
-            print(f"\n► To give work (hire another agent): in a new terminal, set the payer's key then:")
+            print(f"\n► To give work (hire this agent from another terminal): set the payer's key, then:")
             print(f"  export CLIENT_PRIVATE_KEY=0x...   # payer's key (must be different from worker's key!)")
-            print(f"  agentpay client otherbot.eth")
+            print(f"  agentpay client {result}")
         else:
             print(f"\n► To receive work:")
             print(f"  export CLIENT_PRIVATE_KEY={pk_hex}")
             print(f"  export AGENTPAY_ENS_NAME={result}")
             print(f"  agentpay worker")
-            print(f"\n► To give work (hire another agent):")
+            print(f"\n► To give work (hire this agent from another terminal):")
             print(f"  export CLIENT_PRIVATE_KEY=0x...   # payer's key")
-            print(f"  agentpay client otherbot.eth")
+            print(f"  agentpay client {result}")
         if saved_env:
             print(f"\n  Run worker from this directory so .env is loaded.")
     else:

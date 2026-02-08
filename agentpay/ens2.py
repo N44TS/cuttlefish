@@ -975,7 +975,7 @@ Next steps:
    After your wallet has ETH, register your agent's name and where to send jobs.
    Note: Full ENS registration (commit + register + provisioning) takes about 2.5 minutes; wait for it to complete.
    
-   python3 -c "from agentpay import AgentWallet, register_and_provision_ens; wallet = AgentWallet(); ok, name = register_and_provision_ens(wallet, '{label}', capabilities='analyze-data,summarize', endpoint='http://localhost:8000', prices='0.05 USDC per job'); print('Registered:', name if ok else 'Failed: ' + name)"
+   python3 -c "from agentpay import AgentWallet, register_and_provision_ens; wallet = AgentWallet(); ok, name = register_and_provision_ens(wallet, '{label}', capabilities='analyze-data,summarise', endpoint='http://localhost:8000', prices='0.05 USDC per job'); print('Registered:', name if ok else 'Failed: ' + name)"
    
    What this does:
    - Registers "{label}.eth" as your agent's name
