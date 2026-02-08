@@ -444,7 +444,7 @@ async def submit_job(request: Request):
     if not ok:
         debug = (str(payment_proof)[:60] + "..." if len(str(payment_proof)) > 60 else str(payment_proof)) if payment_proof else "(empty)"
         return Response(status_code=402, content=f"{reason} (received: {debug})")
-    # Show on-chain tx for DeFi hackathon proof (yellow_chunked_full / yellow_full / channel = tx at end or whole proof)
+    # Show on-chain tx 
     p = (payment_proof or "").strip()
     if p.startswith("yellow_chunked_full|") and p.count("|") >= 3:
         tx = p.split("|")[3].strip()
@@ -456,7 +456,8 @@ async def submit_job(request: Request):
             print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{tx}")
     elif p.startswith("0x") and len(p) == 66:
         print(f"[WORKER] On-chain settlement tx: https://sepolia.etherscan.io/tx/{p}")
-    print("[WORKER] Payment verified. Doing work...")
+        print("[WORKER] Payment verified.")
+    print("[WORKER] Adjudicator: if client has refused to pay, you can submit last signed state")
     _write_agentpay_status("working", task_type=job.task_type)
     bal_before = _worker_yellow_balance()
     if bal_before is not None:
@@ -467,10 +468,7 @@ async def submit_job(request: Request):
     if not token or os.getenv("AGENTPAY_PAYMENT_ONLY", "").strip().lower() in ("1", "true", "yes"):
         # Payment-only test: no OpenClaw, return stub so client sees completed hire.
         result = f"Payment test OK — {job.task_type} (no OpenClaw; stub result)"
-        print("[WORKER] Payment-only mode: returning stub result.")
     else:
-        n = len(query)
-        print(f"[WORKER] Sending to OpenClaw: {job.task_type} ({n} chars)")
         try:
             from agentpay.llm_task import do_task
             result = do_task(job.task_type, inp)
@@ -489,7 +487,7 @@ async def submit_job(request: Request):
         print(f"[WORKER] Balance after job: {bal_after}")
     _write_agentpay_status("completed", task_type=job.task_type, balance_after=bal_str)
     print("[WORKER] Done. Returning result.")
-    # Show outcome so judges/operators see the bot's answer in the worker terminal
+    # for demo so can see the bot's answer in the worker terminal
     if result and isinstance(result, str) and result.strip():
         preview = result.strip()[:300] + ("..." if len(result.strip()) > 300 else "")
         print(f"[WORKER] Result (preview): {preview}")

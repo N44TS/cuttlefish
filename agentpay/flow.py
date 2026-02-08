@@ -141,6 +141,7 @@ def request_job(
 
     if result.status == "completed":
         print(f"[CLIENT] Settlement complete. Worker received payment — check worker terminal for balance after.")
+        print("[CLIENT] Adjudicator: dispute path available (worker can submit last signed state if client refused).", flush=True)
 
     # 5b) Attach session_id or tx hash for client to use
     if proof:
@@ -197,8 +198,36 @@ def request_job(
             )
             if review_tx:
                 result.attestation_uid = review_tx
-        except Exception:
-            pass  # Don't fail the whole result if review creation fails
+                print("[CLIENT] EAS attestation submitted (job review on-chain)", flush=True)
+            else:
+                print("[CLIENT] EAS review: skipped (set AGENTPAY_EAS_SCHEMA_UID to enable on-chain attestation)", flush=True)
+        except Exception as e:
+            print(f"[CLIENT] EAS review: skipped ({e})", flush=True)
+    # 7) Adjudicator (demo): show dispute path when we have a session — worker could submit last signed state
+    if result.status == "completed" and proof and getattr(result, "yellow_session_id", None):
+        try:
+            from agentpay.adjudicator import submit_dispute
+            session_id = result.yellow_session_id
+            # Build proof string for dispute (e.g. yellow_chunked|id|version or yellow|id|version)
+            p = proof.strip()
+            if p.startswith("yellow_chunked_full|") and "|" in p:
+                parts = p.split("|")
+                if len(parts) >= 3:
+                    state_proof = f"yellow_chunked|{parts[1]}|{parts[2]}"
+                else:
+                    state_proof = p
+            elif p.startswith("yellow_full|") and "|" in p:
+                parts = p.split("|")
+                if len(parts) >= 3:
+                    state_proof = f"yellow|{parts[1]}|{parts[2]}"
+                else:
+                    state_proof = p
+            else:
+                state_proof = p
+            ok = submit_dispute(session_id, state_proof, proof_of_delivery="job_completed", worker_address=bill.recipient, auto_release_demo=True)
+            print(f"[CLIENT] Adjudicator (demo): dispute path shown — submit_dispute(..., auto_release_demo=True) → {ok} (funds would release to worker if client had refused to sign)", flush=True)
+        except Exception as e:
+            print(f"[CLIENT] Adjudicator (demo): skipped ({e})", flush=True)
     return result
 
 
@@ -269,6 +298,7 @@ def hire_agent(
     task_type: str,
     input_data: Dict[str, Any],
     worker_ens_name: Optional[str] = None,
+    worker_endpoint: Optional[str] = None,
     capability: Optional[str] = None,
     known_agents: Optional[List[str]] = None,
     job_id: Optional[str] = None,
@@ -281,9 +311,10 @@ def hire_agent(
     create_review: bool = True,
 ) -> JobResult:
     """
-    Discover worker via ENS (by name or by capability), then run 402 flow. One entry point for "hire and pay."
+    Discover worker via ENS (by name or by capability) or use direct URL, then run 402 flow.
 
-    Call with either:
+    Call with one of:
+      - worker_endpoint="http://localhost:8000"  → no ENS, use URL (local testing).
       - worker_ens_name="worker.eth"  → resolve endpoint from ENS, send job, pay, get result.
       - capability="analyze", known_agents=["a.eth","b.eth"]  → discover_agents, pick first match, same flow.
 
@@ -296,7 +327,10 @@ def hire_agent(
     import secrets
     from agentpay.ens2 import discover_agents, get_agent_info
 
-    if worker_ens_name:
+    if worker_endpoint:
+        submit_url = _submit_job_url(worker_endpoint.strip().rstrip("/"))
+        agent_name = "local"
+    elif worker_ens_name:
         info = get_agent_info(worker_ens_name, rpc_url=rpc_url, mainnet=mainnet)
         if not info:
             return JobResult(status="error", error=f"ENS lookup failed: no agent info for {worker_ens_name}")
@@ -324,7 +358,7 @@ def hire_agent(
     else:
         return JobResult(
             status="error",
-            error="Provide either worker_ens_name or both capability and known_agents",
+            error="Provide worker_endpoint, worker_ens_name, or both capability and known_agents",
         )
 
     job = Job(
