@@ -153,30 +153,30 @@ def _get_effective_manager(w3: Web3, registry, node: bytes, ens_name: str, mainn
     return owner
 
 
-def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Transaction"):
-    """Wait for tx receipt; longer timeout for Sepolia; clear error on timeout."""
+def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Transaction", quiet_fail: bool = False):
+    """Wait for tx receipt; longer timeout for Sepolia; clear error on timeout. If quiet_fail=True, do not print on revert/timeout (caller will handle)."""
     tx_hex = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
-    print(f"⏳ {description} sent: https://sepolia.etherscan.io/tx/{tx_hex}")
-    
-    # First check if transaction exists (may take a moment to propagate)
-    print(f"   Verifying transaction was broadcast...", end="", flush=True)
+    if not quiet_fail:
+        print(f"⏳ {description} sent: https://sepolia.etherscan.io/tx/{tx_hex}")
+        print(f"   Verifying transaction was broadcast...", end="", flush=True)
     tx_found = False
     for i in range(10):  # Check for up to 10 seconds
         try:
             tx_info = w3.eth.get_transaction(tx_hash)
             if tx_info:
                 tx_found = True
-                print(f"\n   ✅ Transaction found on network")
+                if not quiet_fail:
+                    print(f"\n   ✅ Transaction found on network")
                 break
         except TransactionNotFound:
             time.sleep(1)
             print(".", end="", flush=True)
     
-    if not tx_found:
+    if not tx_found and not quiet_fail:
         print(f"\n   ⚠️  Transaction not found on network yet (may still be propagating)")
         print(f"   Check manually: https://sepolia.etherscan.io/tx/{tx_hex}")
-    
-    print(f"   Waiting for confirmation (this can take 30-120 seconds)...", end="", flush=True)
+    if not quiet_fail:
+        print(f"   Waiting for confirmation (this can take 30-120 seconds)...", end="", flush=True)
     
     start_time = time.time()
     last_update = start_time
@@ -191,12 +191,12 @@ def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Tra
                 elapsed = int(time.time() - start_time)
                 status = receipt.get("status")
                 if status == 1:
-                    print(f"\n✅ {description} confirmed after {elapsed}s")
+                    if not quiet_fail:
+                        print(f"\n✅ {description} confirmed after {elapsed}s")
                     return receipt
                 else:
-                    # Transaction failed
-                    elapsed = int(time.time() - start_time)
-                    print(f"\n❌ {description} failed after {elapsed}s (status: {status})")
+                    if not quiet_fail:
+                        print(f"\n❌ {description} failed after {elapsed}s (status: {status})")
                     raise RuntimeError(
                         f"Transaction failed with status {status}. "
                         f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
@@ -205,13 +205,14 @@ def _wait_receipt(w3: Web3, tx_hash, timeout: int = 300, description: str = "Tra
             # Transaction not indexed yet, keep waiting
             elapsed = int(time.time() - start_time)
             if elapsed > timeout:
-                print(f"\n❌ {description} timeout after {elapsed}s")
+                if not quiet_fail:
+                    print(f"\n❌ {description} timeout after {elapsed}s")
                 raise RuntimeError(
                     f"Transaction not confirmed within {timeout}s. "
                     f"Check status: https://sepolia.etherscan.io/tx/{tx_hex}"
                 )
             # Update progress every 10 seconds
-            if elapsed - int(last_update) >= 10:
+            if not quiet_fail and elapsed - int(last_update) >= 10:
                 print(f".", end="", flush=True)
                 last_update = elapsed
             time.sleep(step)
@@ -603,16 +604,12 @@ def set_review_record(ens_name: str, attestation_tx_or_uid: str, wallet: "AgentW
         if raw_tx is None:
             return False
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
-        _wait_receipt(w3, tx_hash, timeout=120, description="Set agentpay.review")
+        _wait_receipt(w3, tx_hash, timeout=120, description="Set agentpay.review", quiet_fail=True)
         return True
     except ValueError:
         raise
-    except RuntimeError as e:
-        if "status 0" in str(e) or "status: 0" in str(e):
-            raise RuntimeError(
-                f"Set agentpay.review reverted. Ensure CLIENT_PRIVATE_KEY owns the ENS name '{n}' (run 'agentpay setup' to reclaim). {e}"
-            ) from e
-        raise
+    except RuntimeError:
+        return False  # Revert or timeout; review is already on EAS, no need to surface
     except Exception:
         return False
 

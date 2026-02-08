@@ -804,7 +804,7 @@ def attest_command():
             pass  # Review is on EAS; client ENS link is optional
         except Exception:
             pass
-    print("  Worker can run: agentpay link-my-reviews — so their ENS points to reviews FOR them (for judges).")
+    print("  Worker can run: agentpay link-my-reviews — so their ENS points to reviews for them.")
 
 
 def link_my_reviews_command():
@@ -870,7 +870,7 @@ def main():
         print("  agentpay adjudicator [info] — Show dispute-resolution infra")
         print("  agentpay adjudicator submit-dispute — Worker: submit dispute (demo)")
         print("  agentpay attest <0xWorkerAddress> — Rate worker on-chain (5 stars, EAS)")
-        print("  agentpay link-my-reviews — Worker: set your ENS so reviews FOR you are visible (for judges)")
+        print("  agentpay link-my-reviews — set your ENS so reviews for you are visible")
         print("  agentpay install-skill — Install AgentPay skill into OpenClaw (so the bot sees it)")
         print("\nExamples:")
         print("  agentpay setup")

@@ -169,7 +169,10 @@ def create_job_review(
     except Exception as e:
         raise RuntimeError(f"EAS build_transaction failed (check schema UID matches EAS Sepolia): {e}") from e
     signed = requester_wallet.account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+    raw_tx = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+    if not raw_tx:
+        raise RuntimeError("Signed transaction missing raw_transaction (check web3/eth-account version)")
+    tx_hash = w3.eth.send_raw_transaction(raw_tx)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
     if receipt["status"] != 1:
         raise RuntimeError(
