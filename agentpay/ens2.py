@@ -32,6 +32,7 @@ SEPOLIA_PUBLIC_RESOLVER = "0xE99638b40E4Fff0129D56f03b55b6bbC4BBE49b5"
 KEY_CAPABILITIES = "agentpay.capabilities"
 KEY_ENDPOINT = "agentpay.endpoint"
 KEY_PRICES = "agentpay.prices"
+KEY_REVIEW = "agentpay.review"  # EAS attestation UID or tx hash — link review to ENS for prize
 
 # --- ABIs (from ens_register_only.py) ---
 CONTROLLER_ABI = [
@@ -526,6 +527,40 @@ def provision_ens_identity(
 
     print(f"\n✅ Successfully provisioned '{ens_name}'")
     return True, ens_name
+
+
+def set_review_record(ens_name: str, attestation_tx_or_uid: str, wallet: "AgentWallet", rpc_url: Optional[str] = None, mainnet: bool = False) -> bool:
+    """
+    Set agentpay.review on an ENS name to the EAS attestation tx (or UID).
+    Links EAS review to ENS for prize. Caller (wallet) must own the ENS name.
+    Returns True if set, False if resolver missing or tx failed.
+    """
+    rpc_urls = [rpc_url] if rpc_url else (MAINNET_RPCS if mainnet else SEPOLIA_RPCS)
+    w3 = _connect_multiple(rpc_urls)
+    registry = w3.eth.contract(address=Web3.to_checksum_address(SEPOLIA_ENS_REGISTRY if not mainnet else "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"), abi=REGISTRY_ABI)
+    n = ens_name.strip()
+    n = n if n.endswith(".eth") else (n.removesuffix(".eth").strip() + ".eth")
+    node = namehash(n)
+    try:
+        resolver_addr = registry.functions.resolver(node).call()
+        if not resolver_addr or resolver_addr == "0x0000000000000000000000000000000000000000":
+            return False
+        resolver = w3.eth.contract(address=Web3.to_checksum_address(resolver_addr), abi=RESOLVER_ABI)
+        tx = resolver.functions.setText(node, KEY_REVIEW, attestation_tx_or_uid.strip()).build_transaction({
+            "from": wallet.address,
+            "chainId": w3.eth.chain_id,
+            "gas": 80000,
+            "nonce": w3.eth.get_transaction_count(wallet.address, "pending"),
+        })
+        signed = wallet.account.sign_transaction(tx)
+        raw_tx = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+        if raw_tx is None:
+            return False
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
+        _wait_receipt(w3, tx_hash, timeout=120, description="Set agentpay.review")
+        return True
+    except Exception:
+        return False
 
 
 # --- Convenience functions (discovery, combined register+provision, setup) ---

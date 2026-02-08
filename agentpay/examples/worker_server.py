@@ -488,7 +488,7 @@ async def submit_job(request: Request):
     if result and isinstance(result, str) and result.strip():
         preview = result.strip()[:300] + ("..." if len(result.strip()) > 300 else "")
         print(f"[WORKER] Result (preview): {preview}")
-    print("[WORKER] Dispute: if client had refused to pay, run: agentpay adjudicator submit-dispute")
+    print("[WORKER] Dispute: if client refuses to unlock payment, run: agentpay adjudicator submit-dispute")
     return {
         "status": "completed",
         "result": result,

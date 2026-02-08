@@ -48,6 +48,7 @@ def request_job(
     pay_fn: Optional[Callable[[Bill, AgentWallet], str]] = None,
     headers: Optional[dict] = None,
     create_review: bool = True,
+    requester_ens_name: Optional[str] = None,
 ) -> JobResult:
     """
     Execute 402 flow: submit job, if 402 then pay and resubmit with proof.
@@ -183,7 +184,7 @@ def request_job(
             except Exception:
                 pass  # Don't fail the job if session close fails (e.g. quorum-2 sandbox limitation).
 
-    # 6) Optional: requester creates EAS review (recipient = worker; requester pays gas). No print here — CLI shows CTA at end.
+    # 6) Optional: requester creates EAS review (recipient = worker; requester pays gas). Link to ENS if requester_ens_name set.
     if create_review and result.status == "completed" and result.worker:
         try:
             from agentpay.eas import create_job_review
@@ -197,6 +198,15 @@ def request_job(
             )
             if review_tx:
                 result.attestation_uid = review_tx
+                req_ens = (requester_ens_name or "").strip()
+                req_ens = req_ens if req_ens.endswith(".eth") else (req_ens.removesuffix(".eth").strip() + ".eth") if req_ens else ""
+                if req_ens:
+                    try:
+                        from agentpay.ens2 import set_review_record
+                        if set_review_record(req_ens, review_tx, wallet):
+                            print("[CLIENT] EAS review linked to ENS (agentpay.review set).", flush=True)
+                    except Exception:
+                        pass
         except Exception:
             pass
     return result
@@ -339,6 +349,7 @@ def hire_agent(
         input_data=input_data,
         price_usdc=price_usdc,
     )
+    requester_ens = (os.getenv("AGENTPAY_ENS_NAME") or "").strip()
     return request_job(
         job,
         submit_url,
@@ -346,4 +357,5 @@ def hire_agent(
         pay_fn=pay_fn,
         headers=headers,
         create_review=create_review,
+        requester_ens_name=requester_ens or None,
     )

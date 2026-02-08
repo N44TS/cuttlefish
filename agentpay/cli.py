@@ -622,8 +622,8 @@ def autonomous_client_command():
                     print(outcome if isinstance(outcome, str) else outcome)
                     print("---")
                 print("")
-                print("[CLIENT] Dispute: if you had refused to pay, worker could run: agentpay adjudicator submit-dispute")
-                print("[CLIENT] Attest: to put this job on-chain, set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) or run agentpay attest when available.")
+                print("[CLIENT] Dispute: if you  if you are unhappy with the outcome, run: agentpay adjudicator submit-dispute")
+                print("[CLIENT] Attest: rate this worker on-chain (EAS review) — set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) to enable.")
             else:
                 print(f"\n⚠️ Hire by capability failed: {hire_result.get('error')}")
             return
@@ -654,8 +654,8 @@ def autonomous_client_command():
                 print(outcome)
             print("---")
         print("")
-        print("[CLIENT] Dispute: if you had refused to pay, worker could run: agentpay adjudicator submit-dispute")
-        print("[CLIENT] Attest: to put this job on-chain, set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) or run agentpay attest when available.")
+        print("[CLIENT] Dispute: if you are unhappy with the outcome, run: agentpay adjudicator submit-dispute")
+        print("[CLIENT] Attest: rate this worker on-chain (EAS review) — set AGENTPAY_EAS_SCHEMA_UID (see agentpay docs) to enable.")
     else:
         err = hire_result.get("error") or "hire did not complete"
         print(f"\n⚠️ Client finished: job posted and accept seen, but hire did not complete: {err}")

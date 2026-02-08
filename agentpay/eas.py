@@ -53,11 +53,12 @@ EAS_ABI = [
     },
 ]
 
-# Register a schema on EAS Sepolia (https://sepolia.easscan.org) once; then set the UID here or via env.
+# Register a schema on EAS Sepolia (https://sepolia.easscan.org) once. Then either:
+# - Set AGENTPAY_EAS_SCHEMA_UID in .env (your own use), or
+# - Paste the schema UID below so end users get it by default (no .env needed).
 # Example schema: "bytes32 jobId, address requester, address worker, uint256 amountWei, string taskType, bool success"
-# Project authors can hardcode the schema UID below so end users don't need AGENTPAY_EAS_SCHEMA_UID.
-DEFAULT_JOB_REVIEW_SCHEMA_UID = ""  # Set after registering schema on sepolia.easscan.org
-JOB_RECEIPT_SCHEMA_UID = os.getenv("AGENTPAY_EAS_SCHEMA_UID", "") or DEFAULT_JOB_REVIEW_SCHEMA_UID
+DEFAULT_JOB_REVIEW_SCHEMA_UID = ""  # Paste your Sepolia schema UID here (0x...) so end users don't need .env
+JOB_RECEIPT_SCHEMA_UID = os.getenv("AGENTPAY_EAS_SCHEMA_UID", "").strip() or DEFAULT_JOB_REVIEW_SCHEMA_UID
 
 
 def _encode_receipt_data(job_id: str, requester: str, worker: str, amount_usdc: float, task_type: str, success: bool) -> bytes:
