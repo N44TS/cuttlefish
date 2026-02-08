@@ -413,16 +413,31 @@ def worker_command():
 
 
 def client_command():
-    """Send a job and pay a worker (hire an agent). Loads .env from cwd; worker ENS from arg or env."""
+    """Send a job and pay a worker (hire an agent). Loads .env from cwd; worker ENS from arg or env, or hire by capability."""
     _load_dotenv()
-    worker_ens = (sys.argv[2] if len(sys.argv) > 2 else os.getenv("WORKER_ENS_NAME", "")).strip().removesuffix(".eth")
-    if worker_ens:
-        worker_ens = f"{worker_ens}.eth" if not worker_ens.endswith(".eth") else worker_ens
-    if not worker_ens:
-        print("Usage: agentpay client <worker.eth>")
-        print("  Example: agentpay client finaltestcuttlepls.eth")
-        print("  Or set WORKER_ENS_NAME in .env and run: agentpay client")
-        sys.exit(1)
+    # Hire by capability: agentpay client --by-capability analyze-data (uses AGENTPAY_KNOWN_AGENTS)
+    by_capability = "--by-capability" in sys.argv
+    capability = "analyze-data"
+    known_agents_raw = (os.getenv("AGENTPAY_KNOWN_AGENTS") or "").strip()
+    if by_capability:
+        idx = sys.argv.index("--by-capability")
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("-"):
+            capability = sys.argv[idx + 1].strip()
+        known_agents = [(a.strip() if a.strip().endswith(".eth") else a.strip() + ".eth") for a in known_agents_raw.split(",") if a.strip()]
+        if not known_agents:
+            print("Usage: agentpay client --by-capability <capability>")
+            print("  Set AGENTPAY_KNOWN_AGENTS=worker1.eth,worker2.eth (comma-separated ENS names to try).")
+            print("  Worker ENS must have agentpay.capabilities set (e.g. 'analyze-data') via provision.")
+            sys.exit(1)
+    else:
+        worker_ens = (sys.argv[2] if len(sys.argv) > 2 else os.getenv("WORKER_ENS_NAME", "")).strip().removesuffix(".eth")
+        if worker_ens:
+            worker_ens = f"{worker_ens}.eth" if not worker_ens.endswith(".eth") else worker_ens
+        if not worker_ens:
+            print("Usage: agentpay client <worker.eth>")
+            print("  Or: agentpay client --by-capability analyze-data (with AGENTPAY_KNOWN_AGENTS=ens.eth)")
+            print("  Or set WORKER_ENS_NAME in .env and run: agentpay client")
+            sys.exit(1)
     if not os.getenv("CLIENT_PRIVATE_KEY") and not os.getenv("AGENTPAY_PRIVATE_KEY"):
         print("❌ No CLIENT_PRIVATE_KEY. Run from the directory where you ran 'agentpay setup' (so .env is loaded), or export CLIENT_PRIVATE_KEY=0x...")
         sys.exit(1)
@@ -431,20 +446,34 @@ def client_command():
     print("=" * 70)
     print("AgentPay Client — Hiring agent via ENS")
     print("=" * 70)
-    print(f"  Worker: {worker_ens}")
+    if by_capability:
+        print(f"  Mode: hire by capability '{capability}' (known_agents: {known_agents})")
+    else:
+        print(f"  Worker: {worker_ens}")
     wallet = AgentWallet()
     print(f"  Payer:  {wallet.address}\n")
     print("  → Worker will return 402 + Bill")
-    print("  → You pay via Yellow (chunked micropayments + on-chain settlement)")
+    print("  → You pay via Yellow (session + on-chain settlement)")
     print("  → Worker verifies payment, does work, returns result\n")
-    result = hire_agent(
-        wallet,
-        task_type="analyze-data",
-        input_data={"query": "Summarize this for the demo"},
-        worker_ens_name=worker_ens,
-        job_id="agentpay_client_001",
-        pay_fn=get_pay_fn("yellow_chunked_full"),
-    )
+    if by_capability:
+        result = hire_agent(
+            wallet,
+            task_type=capability,
+            input_data={"query": "Summarize this for the demo"},
+            capability=capability,
+            known_agents=known_agents,
+            job_id="agentpay_client_001",
+            pay_fn=get_pay_fn("yellow_full"),
+        )
+    else:
+        result = hire_agent(
+            wallet,
+            task_type="analyze-data",
+            input_data={"query": "Summarize this for the demo"},
+            worker_ens_name=worker_ens,
+            job_id="agentpay_client_001",
+            pay_fn=get_pay_fn("yellow_full"),
+        )
     print("\n" + "=" * 70)
     if result.status == "completed":
         print("✅ Result:", result.result or "(ok)")
@@ -533,24 +562,28 @@ def autonomous_client_command():
         sys.exit(1)
     ens_name = (os.getenv("AGENTPAY_ENS_NAME") or "client").strip().removesuffix(".eth").replace("\r", "").replace("\n", "").strip()
     offer_store = {}
-    # One real-looking job: summarise a medical article (worker does the work and gets paid once)
+    # One real-looking job: summarize article (worker does the work and gets paid once). Article is ~2x length for demo.
     medical_query = (
         "Summarise this medical article in 2-3 sentences:\n\n"
         "Hypertension (high blood pressure) affects approximately one in three adults worldwide and is a major risk factor for cardiovascular disease, stroke, and kidney failure. "
         "Key interventions include lifestyle modification (reduced sodium intake, weight management, regular exercise, and moderation of alcohol) and antihypertensive drug therapy when needed. "
         "Clinical guidelines recommend regular BP monitoring, stepped care with combination therapy if targets are not met, and attention to comorbidities such as diabetes and chronic kidney disease. "
-        "Early detection and consistent management significantly reduce the risk of long-term complications."
+        "Early detection and consistent management significantly reduce the risk of long-term complications. "
+        "Population-level strategies include public health campaigns to reduce dietary salt, screening programmes in primary care, and adherence support for prescribed regimens. "
+        "Resistant hypertension (uncontrolled despite three or more drugs) may require specialist workup for secondary causes and consideration of device-based therapies. "
+        "Blood pressure targets vary by age and comorbidity; recent trials support more intensive targets in many higher-risk patients. "
+        "International guidelines are broadly aligned on the importance of out-of-office monitoring (ambulatory or home) to confirm the diagnosis and guide treatment."
     )
     initial = {
-        "task_type": "analyze-data",
+        "task_type": "summarize article",
         "price": "0.05 AP",
         "input_data": {"query": medical_query},
-        "input_ref": "Summarise medical article (see query in job)",
+        "input_ref": "Summarise article (see query in job)",
         "poster_ens": ens_name,
     }
     config = build_demo_config("client", my_ens=ens_name, offer_store=offer_store, poll_interval_seconds=20, initial_offer=initial)
     config["exit_after_first_accept"] = True
-    print("Autonomous client: posting one offer (medical article summary), watching for one accept, then hiring and exiting...")
+    print("Autonomous client: posting one offer (summarize article), watching for one accept, then hiring and exiting...")
     run_autonomous_agent(config)
     hire_result = config.get("_hire_result") or {}
     if hire_result.get("completed"):

@@ -318,14 +318,17 @@ def pay_yellow_chunked_full(
     """
     if chunks is None:
         chunks = _chunk_count_from_env(5)
-    # Step 0: Open channel first (same order as yellow_full). Yellow docs: create_channel before session avoids sandbox/state issues.
+    # Step 0: Open channel first (required). Same order as yellow_full; avoids create_channel failing after session.
+    print("[CLIENT] Step 0: Opening channel (before session)...", flush=True)
     try:
-        print("[CLIENT] Step 0: Opening channel (before session)...", flush=True)
         create_channel(wallet, timeout=_bridge_timeout("CREATE", 120))
         print("[CLIENT] Channel open.", flush=True)
     except RuntimeError as e:
-        # Channel may already exist
-        print(f"[CLIENT] Step 0: {e}", flush=True)
+        raise RuntimeError(
+            f"Step 0 (create_channel) failed — channel must be open before chunked session. {e} "
+            "Ensure wallet has Sepolia ETH for gas and ytest.usd (Yellow faucet). "
+            "If yellow_full works for this wallet, run it once to open a channel, then retry chunked."
+        ) from e
     # Step 1: Chunked micropayments (off-chain). Chunks add up to bill.amount; settlement transfers that full amount.
     print(f"[CLIENT] Step 1: Chunked micropayments ({chunks} chunks, off-chain)...", flush=True)
     chunked_proof = pay_yellow_chunked(bill, wallet, worker_base_url, chunks, worker_endpoint, **kwargs)
