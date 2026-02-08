@@ -549,9 +549,62 @@ def autonomous_client_command():
     hire_result = config.get("_hire_result") or {}
     if hire_result.get("completed"):
         print("\n✅ Client finished: one job posted, one hire completed, exiting.")
+        outcome = hire_result.get("result")
+        if outcome is not None:
+            print("\n--- Result from worker (bot's answer) ---")
+            if isinstance(outcome, str):
+                print(outcome)
+            else:
+                print(outcome)
+            print("---")
     else:
         err = hire_result.get("error") or "hire did not complete"
         print(f"\n⚠️ Client finished: job posted and accept seen, but hire did not complete: {err}")
+
+
+def install_skill_command():
+    """Install the AgentPay skill into OpenClaw so the bot sees it (skills list, hire/work/status)."""
+    import json
+    import shutil
+    _load_dotenv()
+    # Find skills/agentpay: repo root is parent of agentpay/ (where cli.py lives), or cwd
+    repo_root = Path(__file__).resolve().parent.parent
+    skill_src = repo_root / "skills" / "agentpay"
+    if not (skill_src.exists() and (skill_src / "SKILL.md").exists()):
+        skill_src = Path.cwd() / "skills" / "agentpay"
+    if not (skill_src.exists() and (skill_src / "SKILL.md").exists()):
+        print("AgentPay skill not found at skills/agentpay/. Run from the repo root (where skills/ lives).")
+        sys.exit(1)
+    dest_dir = Path.home() / ".openclaw" / "skills"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "agentpay"
+    try:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(skill_src, dest)
+        print(f"Installed skill: {dest}")
+    except Exception as e:
+        print(f"Failed to copy skill: {e}")
+        sys.exit(1)
+    # Ensure openclaw.json has skills.entries.agentpay.enabled
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    try:
+        if config_path.exists():
+            config = json.loads(config_path.read_text())
+        else:
+            config = {}
+        skills = config.setdefault("skills", {})
+        entries = skills.setdefault("entries", {})
+        entries["agentpay"] = entries.get("agentpay") or {}
+        if not isinstance(entries["agentpay"], dict):
+            entries["agentpay"] = {}
+        entries["agentpay"]["enabled"] = True
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2))
+        print(f"Updated {config_path} (skills.entries.agentpay.enabled = true)")
+    except Exception as e:
+        print(f"Could not update openclaw.json: {e}. You may need to add agentpay manually (see agentpay/docs/OPENCLAW_SETUP.md).")
+    print("\nNext: Run 'openclaw skills list' to verify. Restart the gateway (or start a new chat) so the skill appears.")
 
 
 def main():
@@ -566,6 +619,7 @@ def main():
         print("  agentpay demo-feed       — Start demo feed server (for autonomous demo)")
         print("  agentpay autonomous-worker — Worker + watch feed, reply to offers")
         print("  agentpay autonomous-client — Client: post offer, watch for accepts, pay")
+        print("  agentpay install-skill — Install AgentPay skill into OpenClaw (so the bot sees it)")
         print("\nExamples:")
         print("  agentpay setup")
         print("  agentpay worker")
@@ -586,9 +640,11 @@ def main():
         autonomous_worker_command()
     elif command == "autonomous-client":
         autonomous_client_command()
+    elif command == "install-skill":
+        install_skill_command()
     else:
         print(f"Unknown command: {command}")
-        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client'")
+        print("Use 'agentpay setup', 'agentpay worker', 'agentpay client <worker.eth>', 'agentpay demo-feed', 'agentpay autonomous-worker', 'agentpay autonomous-client', 'agentpay install-skill'")
         sys.exit(1)
 
 

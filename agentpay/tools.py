@@ -5,6 +5,7 @@ pay_agent() = create wallet from env + hire_agent. One entry point so the bot
 doesn't need to reason about AgentWallet or hire_agent parameters.
 """
 
+import os
 from typing import Any, Dict, Optional
 
 from agentpay.schema import JobResult
@@ -31,7 +32,8 @@ def pay_agent(
         task_type: e.g. "analyze-data", "summarize".
         input_data: Job input dict.
         job_id: Optional; default auto-generated.
-        pay_fn: Optional; default is yellow_chunked_full.
+        pay_fn: Optional; default from AGENTPAY_PAYMENT_METHOD (yellow_chunked_full if unset).
+            Use AGENTPAY_PAYMENT_METHOD=yellow for session-only (no on-chain settlement) to avoid bridge timeouts.
         **kwargs: Passed to hire_agent (e.g. mainnet, rpc_url).
 
     Returns:
@@ -39,7 +41,8 @@ def pay_agent(
     """
     wallet = AgentWallet()
     if pay_fn is None:
-        pay_fn = get_pay_fn("yellow_chunked_full")
+        payment_method = (os.getenv("AGENTPAY_PAYMENT_METHOD") or "").strip() or "yellow_chunked_full"
+        pay_fn = get_pay_fn(payment_method)
     return hire_agent(
         wallet,
         task_type=task_type,

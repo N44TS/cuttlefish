@@ -462,6 +462,10 @@ async def submit_job(request: Request):
         print(f"[WORKER] Balance after job: {bal_after}")
     _write_agentpay_status("completed", task_type=job.task_type, balance_after=bal_str)
     print("[WORKER] Done. Returning result.")
+    # Show outcome so judges/operators see the bot's answer in the worker terminal
+    if result and isinstance(result, str) and result.strip():
+        preview = result.strip()[:300] + ("..." if len(result.strip()) > 300 else "")
+        print(f"[WORKER] Result (preview): {preview}")
     return {
         "status": "completed",
         "result": result,

@@ -70,3 +70,7 @@ When the user says "go find work", "I want to receive work", or "start the worke
 | Accept jobs (manual) | `agentpay worker` |
 
 Always run from the directory where `agentpay setup` was run (so `.env` is loaded), or set `CLIENT_PRIVATE_KEY` and `AGENTPAY_ENS_NAME` in the environment. **You** (this agent) use that identity when you run worker or client.
+
+---
+
+**For judges / evaluators:** OpenClaw does not auto-load skills from the repo. Run **`agentpay install-skill`** from the repo root so the agentpay skill is in the bot's list (then `openclaw skills list` and restart gateway or new chat). Demo: `agentpay demo-feed` (terminal 1), `agentpay autonomous-worker` (terminal 2), `agentpay autonomous-client` (terminal 3). Use `AGENTPAY_PAYMENT_METHOD=yellow` on both worker and client. The client terminal prints the job result when the hire completes; the worker terminal shows "Result (preview): …".

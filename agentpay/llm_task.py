@@ -103,11 +103,13 @@ def do_task_with_llm(task_type: str, input_data: Dict[str, Any]) -> str:
 
 
 def _build_prompt(task_type: str, query: str) -> str:
+    """Build prompt for OpenClaw. Prefix marks this as an AgentPay job (same bot, skill context)."""
+    prefix = "[AgentPay job] "
     if "summar" in query.lower() or "summarise" in query.lower() or "summarize" in query.lower():
-        return f"Please summarise the following. Keep it to 2-4 clear sentences.\n\n{query}"
+        return prefix + f"Please summarise the following. Keep it to 2-4 clear sentences.\n\n{query}"
     if "medical" in query.lower() or "article" in query.lower():
-        return f"Summarise this medical/article content in 2-4 clear, accurate sentences.\n\n{query}"
-    return f"Task: {task_type}\n\nPlease complete this task:\n\n{query}"
+        return prefix + f"Summarise this medical/article content in 2-4 clear, accurate sentences.\n\n{query}"
+    return prefix + f"Task: {task_type}\n\nPlease complete this task:\n\n{query}"
 
 
 def _fallback_result(task_type: str, input_data: Dict[str, Any], reason: str) -> str:

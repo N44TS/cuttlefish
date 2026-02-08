@@ -353,13 +353,25 @@ def pay_yellow_channel(bill: Bill, wallet: AgentWallet, worker_endpoint: Optiona
     try:
         print("[CLIENT] Opening channel (step 4a)...", flush=True)
         create_channel(wallet, timeout=t_create)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Step 4a (create_channel) failed: {e}. "
+            "Check you have enough ytest.usd (Yellow faucet) and a little Sepolia ETH for gas."
+        )
+    try:
         print("[CLIENT] Transferring to worker (step 4c)...", flush=True)
         channel_transfer(wallet, bill.recipient, amount=bill.amount, timeout=t_transfer)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"Step 4c (channel_transfer) failed: {e}. "
+            "Check you have enough ytest.usd (Yellow faucet) and a little Sepolia ETH for gas."
+        )
+    try:
         print("[CLIENT] Closing channel (step 4d)...", flush=True)
         tx_hash = close_channel(wallet, timeout=t_close)
     except RuntimeError as e:
         raise RuntimeError(
-            f"{e}. "
+            f"Step 4d (close_channel) failed: {e}. "
             "Check you have enough ytest.usd (Yellow faucet) and a little Sepolia ETH for gas."
         )
     if not tx_hash:

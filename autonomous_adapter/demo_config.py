@@ -112,8 +112,8 @@ def build_demo_config(
         }
         return config
 
-    # client — track whether hire actually completed (for autonomous_client exit message)
-    hire_result: Dict[str, Any] = {"completed": False, "error": None}
+    # client — track whether hire completed and the job result (for autonomous_client exit + show outcome)
+    hire_result: Dict[str, Any] = {"completed": False, "error": None, "result": None}
 
     def on_accept(a: Dict[str, Any]) -> None:
         item = a.get("_item") or {}
@@ -130,16 +130,19 @@ def build_demo_config(
             if result and getattr(result, "status", None) == "completed":
                 hire_result["completed"] = True
                 hire_result["error"] = None
+                hire_result["result"] = getattr(result, "result", None)
             else:
                 err = getattr(result, "error", None) or str(result)
                 hire_result["completed"] = False
                 hire_result["error"] = err
+                hire_result["result"] = None
                 print(f"[CLIENT] Hire failed: {err}")
                 if "ENS lookup failed" in str(err) or "no agent info" in str(err).lower():
                     print("[CLIENT] Tip: Accept had wrong ENS (e.g. truncated). Worker must post correct ENS; check AGENTPAY_ENS_NAME in worker .env.")
         except Exception as e:
             hire_result["completed"] = False
             hire_result["error"] = str(e)
+            hire_result["result"] = None
             print(f"[CLIENT] Hire error: {e}")
 
     def on_offer(_: Dict[str, Any]) -> None:
